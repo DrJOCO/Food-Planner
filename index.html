@@ -1,0 +1,351 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Family Food Planner</title>
+    <link rel="stylesheet" href="styles.css?v=4" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <header class="app-header">
+        <div class="header-copy">
+          <p class="eyebrow">Family food planner</p>
+          <h1>Plan the week, handle Chloe versions, shop once.</h1>
+          <div class="week-bar" aria-label="Week controls">
+            <button class="icon-button" id="previousWeek" type="button" aria-label="Previous week">‹</button>
+            <div>
+              <span class="week-kicker">Planning week</span>
+              <strong id="weekLabel"></strong>
+            </div>
+            <button class="icon-button" id="nextWeek" type="button" aria-label="Next week">›</button>
+            <button class="text-button" id="todayButton" type="button">Today</button>
+          </div>
+        </div>
+        <img
+          class="header-image"
+          src="assets/kitchen-planning-banner.png"
+          alt="Kitchen counter with vegetables, meal notes, and grocery bags"
+        />
+      </header>
+
+      <nav class="tab-bar" aria-label="Main views">
+        <button class="tab-button active" type="button" data-tab="planner">Planner</button>
+        <button class="tab-button" type="button" data-tab="recipes">Recipes</button>
+        <button class="tab-button" type="button" data-tab="home">Home</button>
+        <button class="tab-button" type="button" data-tab="groceries">Groceries</button>
+      </nav>
+
+      <main>
+        <section class="dashboard-grid" aria-label="Weekly summary">
+          <article class="metric">
+            <span>Meals planned</span>
+            <strong id="plannedCount">0</strong>
+          </article>
+          <article class="metric">
+            <span>Everyone meals</span>
+            <strong id="sharedCount">0</strong>
+          </article>
+          <article class="metric">
+            <span>Chloe versions</span>
+            <strong id="chloeCount">0</strong>
+          </article>
+          <article class="metric">
+            <span>Chloe likes</span>
+            <strong id="chloeFavoriteCount">0</strong>
+          </article>
+          <article class="metric">
+            <span>At home</span>
+            <strong id="homeCount">0</strong>
+          </article>
+          <article class="metric">
+            <span>Need to buy</span>
+            <strong id="groceryCount">0</strong>
+          </article>
+        </section>
+
+        <section class="view active" id="plannerView" data-view="planner">
+          <div class="planner-layout">
+            <aside class="tool-panel">
+              <div class="panel-heading">
+                <h2 id="mealFormTitle">Add meal</h2>
+                <button class="ghost-button hidden" id="cancelMealEdit" type="button">Cancel</button>
+              </div>
+              <form id="mealForm" class="stacked-form">
+                <input id="editingMealId" type="hidden" />
+
+                <label>
+                  Day
+                  <select id="mealDay" required></select>
+                </label>
+
+                <label>
+                  Slot
+                  <select id="mealSlot" required>
+                    <option value="Dinner">Dinner</option>
+                    <option value="Lunch">Lunch</option>
+                    <option value="Breakfast">Breakfast</option>
+                    <option value="Prep">Prep</option>
+                  </select>
+                </label>
+
+                <label>
+                  Meal source
+                  <select id="mealRecipe"></select>
+                </label>
+
+                <label id="customMealLabel">
+                  Meal name
+                  <input id="customMealName" type="text" placeholder="Quesadillas and fruit" />
+                </label>
+
+                <label>
+                  Who eats it
+                  <select id="mealAudience">
+                    <option value="Everyone">Everyone</option>
+                    <option value="Adults">Adults</option>
+                    <option value="Chloe version">Chloe version</option>
+                  </select>
+                </label>
+
+                <label>
+                  Chloe note
+                  <input id="chloeNote" type="text" placeholder="Plain noodles, sauce on side" />
+                </label>
+
+                <label>
+                  Extra groceries
+                  <textarea id="extraGroceries" rows="4" placeholder="berries | Produce&#10;milk | Dairy"></textarea>
+                </label>
+
+                <button class="primary-button" id="saveMealButton" type="submit">Add meal</button>
+              </form>
+
+              <div class="quick-picks">
+                <div class="panel-heading compact">
+                  <h3>Quick picks</h3>
+                  <button class="ghost-button" id="shuffleIdeas" type="button">Refresh</button>
+                </div>
+                <div class="quick-list" id="quickPickList"></div>
+              </div>
+            </aside>
+
+            <section class="week-grid" id="weekGrid" aria-label="Weekly meal plan"></section>
+          </div>
+        </section>
+
+        <section class="view" id="recipesView" data-view="recipes">
+          <div class="recipes-layout">
+            <aside class="tool-panel">
+              <div class="panel-heading">
+                <h2 id="recipeFormTitle">Add recipe</h2>
+                <button class="ghost-button hidden" id="cancelRecipeEdit" type="button">Cancel</button>
+              </div>
+              <form id="recipeForm" class="stacked-form">
+                <input id="editingRecipeId" type="hidden" />
+
+                <label>
+                  Recipe name
+                  <input id="recipeName" type="text" placeholder="Chicken rice bowls" required />
+                </label>
+
+                <div class="form-row">
+                  <label>
+                    Time
+                    <input id="recipeTime" type="text" placeholder="30 min" />
+                  </label>
+                  <label>
+                    Servings
+                    <input id="recipeServings" type="number" min="1" step="1" placeholder="4" />
+                  </label>
+                </div>
+
+                <label>
+                  Tags
+                  <input id="recipeTags" type="text" placeholder="quick, kid-friendly, leftovers" />
+                </label>
+
+                <label>
+                  Ingredients
+                  <textarea id="recipeIngredients" rows="7" placeholder="1 lb chicken breast | Meat&#10;2 cups rice | Pantry"></textarea>
+                </label>
+
+                <label>
+                  Chloe note
+                  <input id="recipeChloeNote" type="text" placeholder="Keep sauce separate" />
+                </label>
+
+                <label>
+                  Steps
+                  <textarea id="recipeSteps" rows="5" placeholder="Cook rice&#10;Roast vegetables&#10;Assemble bowls"></textarea>
+                </label>
+
+                <button class="primary-button" id="saveRecipeButton" type="submit">Save recipe</button>
+              </form>
+            </aside>
+
+            <section>
+              <div class="filter-row">
+                <label class="search-box">
+                  Search recipes
+                  <input id="recipeSearch" type="search" placeholder="chicken, quick, Chloe" />
+                </label>
+                <select id="recipeFilter" aria-label="Recipe filter">
+                  <option value="all">All recipes</option>
+                  <option value="kid-friendly">Kid-friendly</option>
+                  <option value="quick">Quick</option>
+                  <option value="leftovers">Leftovers</option>
+                  <option value="one-pan">One-pan</option>
+                </select>
+              </div>
+              <div class="recipe-list" id="recipeList"></div>
+            </section>
+          </div>
+        </section>
+
+        <section class="view" id="homeView" data-view="home">
+          <div class="home-layout">
+            <aside class="tool-panel">
+              <div class="panel-heading">
+                <h2>Add home ingredient</h2>
+              </div>
+              <form id="homeIngredientForm" class="stacked-form">
+                <label>
+                  Item
+                  <input id="homeIngredientName" type="text" placeholder="broccoli" required />
+                </label>
+
+                <div class="form-row">
+                  <label>
+                    Amount
+                    <input id="homeIngredientAmount" type="text" placeholder="1 head" />
+                  </label>
+                  <label>
+                    Category
+                    <select id="homeIngredientCategory">
+                      <option>Produce</option>
+                      <option>Meat</option>
+                      <option>Dairy</option>
+                      <option>Pantry</option>
+                      <option>Frozen</option>
+                      <option>Bakery</option>
+                      <option>Household</option>
+                      <option>Other</option>
+                    </select>
+                  </label>
+                </div>
+
+                <label class="check-row">
+                  <input id="homeIngredientUseSoon" type="checkbox" />
+                  Use soon
+                </label>
+
+                <button class="primary-button" type="submit">Add ingredient</button>
+              </form>
+
+              <div class="bulk-add">
+                <div class="panel-heading compact">
+                  <h3>Bulk add</h3>
+                </div>
+                <form id="bulkHomeForm" class="stacked-form">
+                  <label>
+                    Ingredients
+                    <textarea id="bulkHomeIngredients" rows="6" placeholder="eggs | Dairy&#10;rice | Pantry&#10;1 lb chicken | Meat"></textarea>
+                  </label>
+                  <button class="text-button" type="submit">Add list</button>
+                </form>
+              </div>
+
+              <div class="bulk-add">
+                <div class="panel-heading compact">
+                  <h3>Chloe favorite</h3>
+                </div>
+                <form id="chloeFavoriteForm" class="stacked-form">
+                  <label>
+                    Food
+                    <input id="chloeFavoriteName" type="text" placeholder="rice" required />
+                  </label>
+                  <label>
+                    Note
+                    <input id="chloeFavoriteNote" type="text" placeholder="Plain, with seaweed" />
+                  </label>
+                  <button class="text-button" type="submit">Add favorite</button>
+                </form>
+              </div>
+            </aside>
+
+            <section class="home-main">
+              <section class="recommendation-section">
+                <div class="panel-heading">
+                  <h2>Recommended from home</h2>
+                </div>
+                <div class="recommendation-list" id="homeRecommendations"></div>
+              </section>
+
+              <section>
+                <div class="panel-heading">
+                  <h2>Chloe favorites</h2>
+                </div>
+                <div class="favorite-list" id="chloeFavoriteList"></div>
+              </section>
+
+              <section>
+                <div class="panel-heading">
+                  <h2>Home ingredients</h2>
+                </div>
+                <div class="home-list" id="homeIngredientList"></div>
+              </section>
+            </section>
+          </div>
+        </section>
+
+        <section class="view" id="groceriesView" data-view="groceries">
+          <div class="grocery-layout">
+            <aside class="tool-panel">
+              <div class="panel-heading">
+                <h2>Add grocery</h2>
+              </div>
+              <form id="manualGroceryForm" class="stacked-form">
+                <label>
+                  Item
+                  <input id="manualGroceryName" type="text" placeholder="bananas" required />
+                </label>
+
+                <div class="form-row">
+                  <label>
+                    Amount
+                    <input id="manualGroceryAmount" type="text" placeholder="6" />
+                  </label>
+                  <label>
+                    Category
+                    <select id="manualGroceryCategory">
+                      <option>Produce</option>
+                      <option>Meat</option>
+                      <option>Dairy</option>
+                      <option>Pantry</option>
+                      <option>Frozen</option>
+                      <option>Bakery</option>
+                      <option>Household</option>
+                      <option>Other</option>
+                    </select>
+                  </label>
+                </div>
+
+                <button class="primary-button" type="submit">Add item</button>
+              </form>
+
+              <div class="grocery-actions">
+                <button class="text-button" id="clearCheckedGroceries" type="button">Reset checks</button>
+                <button class="text-button" id="printGroceries" type="button">Print</button>
+              </div>
+            </aside>
+
+            <section class="grocery-list" id="groceryList" aria-label="Grocery list"></section>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <script src="app.js?v=4"></script>
+  </body>
+</html>
