@@ -264,6 +264,7 @@ const els = {
   cancelRecipeEdit: document.querySelector("#cancelRecipeEdit"),
   recipeSearch: document.querySelector("#recipeSearch"),
   recipeFilter: document.querySelector("#recipeFilter"),
+  recipeTotal: document.querySelector("#recipeTotal"),
   recipeList: document.querySelector("#recipeList"),
   homeIngredientForm: document.querySelector("#homeIngredientForm"),
   homeIngredientName: document.querySelector("#homeIngredientName"),
@@ -334,6 +335,7 @@ function loadState() {
       manualGroceries: parsed.manualGroceries || [],
       groceryChecked: parsed.groceryChecked || {},
       appliedImports: parsed.appliedImports || [],
+      selectedDate: parsed.selectedDate || toIso(new Date()),
       activeTab: getInitialActiveTab(parsed.activeTab || "planner"),
     };
     const importedState = applyBuiltInImports(loadedState);
@@ -358,6 +360,7 @@ function defaultState(weekStart) {
     manualGroceries: [],
     groceryChecked: {},
     appliedImports: [],
+    selectedDate: toIso(new Date()),
   };
 }
 
@@ -448,18 +451,22 @@ function saveAndRender() {
 function bindEvents() {
   els.previousWeek.addEventListener("click", () => {
     state.weekStart = toIso(addDays(fromIso(state.weekStart), -7));
+    state.selectedDate = toIso(addDays(fromIso(state.selectedDate || state.weekStart), -7));
     resetMealForm(false);
     saveAndRender();
   });
 
   els.nextWeek.addEventListener("click", () => {
     state.weekStart = toIso(addDays(fromIso(state.weekStart), 7));
+    state.selectedDate = toIso(addDays(fromIso(state.selectedDate || state.weekStart), 7));
     resetMealForm(false);
     saveAndRender();
   });
 
   els.todayButton.addEventListener("click", () => {
-    state.weekStart = toIso(startOfWeek(new Date()));
+    const today = new Date();
+    state.weekStart = toIso(startOfWeek(today));
+    state.selectedDate = toIso(today);
     resetMealForm(false);
     saveAndRender();
   });
@@ -510,6 +517,7 @@ function bindEvents() {
 
 function render() {
   const weekDates = getWeekDates();
+  ensureSelectedDate(weekDates);
   renderTabs();
   renderWeekLabel(weekDates);
   renderMealFormOptions(weekDates);
@@ -540,7 +548,19 @@ function renderWeekLabel(weekDates) {
     day: "numeric",
     year: "numeric",
   });
-  els.weekLabel.textContent = `${first} to ${last}`;
+  els.weekLabel.textContent = `${first} - ${last}`;
+}
+
+function ensureSelectedDate(weekDates) {
+  const selected = state.selectedDate || toIso(new Date());
+  const selectedInWeek = weekDates.some((date) => toIso(date) === selected);
+  if (selectedInWeek) {
+    return;
+  }
+
+  const todayIso = toIso(new Date());
+  const todayInWeek = weekDates.some((date) => toIso(date) === todayIso);
+  state.selectedDate = todayInWeek ? todayIso : toIso(weekDates[0]);
 }
 
 function renderMealFormOptions(weekDates) {
@@ -552,7 +572,7 @@ function renderMealFormOptions(weekDates) {
     })
     .join("");
 
-  const nextDate = getFirstOpenDinnerDate() || toIso(weekDates[0]);
+  const nextDate = state.selectedDate || getFirstOpenDinnerDate() || toIso(weekDates[0]);
   els.mealDay.value = currentValue || nextDate;
 }
 
@@ -582,6 +602,9 @@ function renderSummary() {
   els.chloeFavoriteCount.textContent = state.chloeFavorites.length;
   els.homeCount.textContent = state.homeIngredients.length;
   els.groceryCount.textContent = groceries.length;
+  if (els.recipeTotal) {
+    els.recipeTotal.textContent = state.recipes.length;
+  }
 }
 
 function renderQuickPicks() {
@@ -613,7 +636,7 @@ function renderQuickPicks() {
               <strong>${escapeHtml(recipe.name)}</strong>
               <span>${escapeHtml(recipe.time || "Anytime")} · ${escapeHtml(recipe.tags.slice(0, 2).join(", ") || "recipe")}${escapeHtml(homeText)}${escapeHtml(chloeText)}</span>
             </div>
-            <button class="small-button" type="button" data-action="quick-add" data-id="${recipe.id}">Add</button>
+            <button class="add-button" type="button" data-action="quick-add" data-id="${recipe.id}" aria-label="Add ${escapeAttribute(recipe.name)}">+</button>
           </article>
         `;
       },
@@ -623,32 +646,39 @@ function renderQuickPicks() {
 
 function renderWeekGrid(weekDates) {
   const meals = getCurrentWeekMeals();
+  const selectedIso = state.selectedDate || toIso(weekDates[0]);
+  const selectedDate = fromIso(selectedIso);
+  const selectedMeals = meals
+    .filter((meal) => meal.date === selectedIso)
+    .sort((a, b) => (SLOT_ORDER[a.slot] || 99) - (SLOT_ORDER[b.slot] || 99));
 
-  els.weekGrid.innerHTML = weekDates
+  const dayPills = weekDates
     .map((date) => {
       const iso = toIso(date);
-      const dayMeals = meals
-        .filter((meal) => meal.date === iso)
-        .sort((a, b) => (SLOT_ORDER[a.slot] || 99) - (SLOT_ORDER[b.slot] || 99));
-
-      const body = dayMeals.length
-        ? dayMeals.map(renderMealCard).join("")
-        : `<div class="empty-state"><strong>No meal yet</strong><span>Ready for a plan.</span></div>`;
+      const hasMeals = meals.some((meal) => meal.date === iso);
+      const selected = iso === selectedIso;
 
       return `
-        <article class="day-column">
-          <header class="day-header">
-            <div>
-              <strong>${escapeHtml(formatDate(date, { weekday: "short" }))}</strong>
-              <span>${escapeHtml(formatDate(date, { month: "short", day: "numeric" }))}</span>
-            </div>
-            <button class="small-button" type="button" data-action="set-day" data-date="${iso}">Add</button>
-          </header>
-          <div class="day-body">${body}</div>
-        </article>
+        <button class="day-pill ${selected ? "selected" : ""}" type="button" data-action="select-day" data-date="${iso}">
+          <span>${escapeHtml(formatDate(date, { weekday: "short" }).slice(0, 1))}</span>
+          <strong>${escapeHtml(formatDate(date, { day: "numeric" }))}</strong>
+          ${hasMeals ? `<i aria-hidden="true"></i>` : ""}
+        </button>
       `;
     })
     .join("");
+
+  const mealCards = selectedMeals.length
+    ? selectedMeals.map(renderMealCard).join("")
+    : `<div class="empty-state"><strong>No meal yet</strong><span>Ready for a plan.</span><button class="add-day-button" type="button" data-action="set-day" data-date="${selectedIso}">Add dinner</button></div>`;
+
+  els.weekGrid.innerHTML = `
+    <div class="day-pill-row">${dayPills}</div>
+    <div class="selected-day-heading">
+      ${escapeHtml(formatDate(selectedDate, { weekday: "long", month: "short", day: "numeric" }))}
+    </div>
+    <div class="day-body">${mealCards}</div>
+  `;
 }
 
 function renderMealCard(meal) {
@@ -764,7 +794,6 @@ function renderGroceries() {
     return;
   }
 
-  const alreadyHomeHtml = renderAlreadyHomeSection(alreadyHome);
   const groceryHtml = CATEGORY_ORDER.map((category) => {
     const groupItems = grouped.get(category) || [];
     if (!groupItems.length) {
@@ -800,7 +829,8 @@ function renderGroceries() {
     `;
   }).join("");
 
-  els.groceryList.innerHTML = `${alreadyHomeHtml}${groceryHtml}`;
+  const alreadyHomeHtml = renderAlreadyHomeSection(alreadyHome);
+  els.groceryList.innerHTML = `${groceryHtml}${alreadyHomeHtml}`;
 }
 
 function renderHome() {
@@ -882,45 +912,40 @@ function renderChloeFavoriteList() {
 }
 
 function renderHomeIngredientList() {
-  const grouped = groupByCategory(state.homeIngredients);
-
   if (!state.homeIngredients.length) {
     els.homeIngredientList.innerHTML = `<div class="empty-wide"><strong>No home ingredients yet</strong></div>`;
     return;
   }
 
-  els.homeIngredientList.innerHTML = CATEGORY_ORDER.map((category) => {
-    const items = (grouped.get(category) || []).slice().sort((a, b) => a.name.localeCompare(b.name));
-    if (!items.length) {
-      return "";
-    }
+  const items = state.homeIngredients
+    .slice()
+    .sort((a, b) => sortGroceryItems(a, b));
 
-    const rows = items
-      .map((item) => {
-        const useSoon = item.useSoon ? `<span class="pill tag">use soon</span>` : "";
-        return `
-          <div class="home-item">
-            <span>
-              <strong>${escapeHtml(formatHomeItem(item))}</strong>
-              <span class="home-meta">${escapeHtml(category)}</span>
-            </span>
-            <div class="meal-actions">
-              ${useSoon}
-              <button class="small-button" type="button" data-action="toggle-use-soon" data-id="${item.id}">${item.useSoon ? "Unmark" : "Use soon"}</button>
-              <button class="small-button" type="button" data-action="remove-home" data-id="${item.id}">Remove</button>
-            </div>
+  const rows = items
+    .map((item) => {
+      const useSoon = item.useSoon ? `<span class="use-soon-badge">use soon</span>` : "";
+      return `
+        <div class="home-item">
+          <span class="home-item-name">
+            <strong>${escapeHtml(formatHomeItem(item))}</strong>
+            ${useSoon}
+          </span>
+          <span class="home-meta">${escapeHtml(normalizeCategory(item.category))}</span>
+          <div class="row-actions">
+            <button class="small-button" type="button" data-action="toggle-use-soon" data-id="${item.id}">${item.useSoon ? "Unmark" : "Use soon"}</button>
+            <button class="small-button" type="button" data-action="remove-home" data-id="${item.id}">Remove</button>
           </div>
-        `;
-      })
-      .join("");
+        </div>
+      `;
+    })
+    .join("");
 
-    return `
-      <section class="home-group">
-        <h3>${escapeHtml(category)} <span>${items.length}</span></h3>
-        <div class="home-items">${rows}</div>
-      </section>
-    `;
-  }).join("");
+  els.homeIngredientList.innerHTML = `
+    <section class="home-group">
+      <h3>Pantry <span>· ${items.length} ${items.length === 1 ? "item" : "items"}</span></h3>
+      <div class="home-items">${rows}</div>
+    </section>
+  `;
 }
 
 function renderAlreadyHomeSection(items) {
@@ -928,24 +953,12 @@ function renderAlreadyHomeSection(items) {
     return "";
   }
 
-  const rows = items
-    .map(
-      (item) => `
-        <div class="grocery-item home-stocked">
-          <span class="stock-icon">OK</span>
-          <span>
-            <strong>${escapeHtml(formatGroceryItem(item))}</strong>
-            <span class="grocery-source">${escapeHtml(item.sources.join(", "))}</span>
-          </span>
-        </div>
-      `,
-    )
-    .join("");
+  const names = items.map((item) => escapeHtml(formatGroceryItem(item))).join(" · ");
 
   return `
-    <section class="grocery-group">
-      <h2>Already at home <span>${items.length}</span></h2>
-      <div class="grocery-items">${rows}</div>
+    <section class="already-home-card">
+      <h2>Already at home</h2>
+      <p>${names}</p>
     </section>
   `;
 }
@@ -983,6 +996,7 @@ function handleMealSubmit(event) {
     state.planItems.push(meal);
   }
 
+  state.selectedDate = meal.date;
   resetMealForm(false);
   saveAndRender();
 }
@@ -995,12 +1009,20 @@ function handleWeekClick(event) {
 
   const { action, id, date } = button.dataset;
 
+  if (action === "select-day") {
+    state.selectedDate = date;
+    els.mealDay.value = date;
+    saveAndRender();
+    return;
+  }
+
   if (action === "set-day") {
     state.activeTab = "planner";
+    state.selectedDate = date;
     els.mealDay.value = date;
     els.mealSlot.value = "Dinner";
+    saveAndRender();
     els.mealRecipe.focus();
-    renderTabs();
     return;
   }
 
@@ -1273,6 +1295,7 @@ function addRecipeToFirstOpenDinner(recipeId) {
   });
 
   state.activeTab = "planner";
+  state.selectedDate = date;
   saveAndRender();
 }
 
