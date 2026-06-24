@@ -11,6 +11,41 @@ const CATEGORY_ORDER = [
   "Other",
 ];
 
+const PANTRY_PHOTO_IMPORT_ID = "pantry-photos-2026-06-24";
+const PANTRY_PHOTO_IMPORT_LINES = `
+Barilla rotini | Pantry
+tri-color rotini | Pantry
+tuna cans | Pantry
+Ritz fresh stacks crackers | Pantry
+instant noodles | Pantry
+snack chips | Pantry
+boxed curry mix | Pantry
+corn starch | Pantry
+cane sugar | Pantry
+gochugaru Korean red pepper powder | Pantry
+soy sauce | Pantry
+soba sauce | Pantry
+fish sauce | Pantry
+rice vinegar | Pantry
+aji-mirin sweet cooking rice seasoning | Pantry
+sesame oil | Pantry
+Maggi seasoning | Pantry
+Cholula hot sauce | Pantry
+food coloring | Pantry
+ground cinnamon | Pantry
+coarse kosher salt | Pantry
+sea salt crystals | Pantry
+MSG seasoning | Pantry
+garlic powder | Pantry
+whole black peppercorns | Pantry
+paprika | Pantry
+mushroom umami seasoning | Pantry
+olives | Pantry
+milk | Dairy
+Siggi's yogurt | Dairy
+sparkling water | Pantry
+`;
+
 const SLOT_ORDER = {
   Breakfast: 1,
   Lunch: 2,
@@ -280,11 +315,16 @@ function loadState() {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) {
-      return defaultState(todayWeekStart);
+      const initialState = defaultState(todayWeekStart);
+      const importedState = applyBuiltInImports(initialState);
+      if (importedState.changed) {
+        persistState(importedState.state);
+      }
+      return importedState.state;
     }
 
     const parsed = JSON.parse(raw);
-    return {
+    const loadedState = {
       ...defaultState(todayWeekStart),
       ...parsed,
       recipes: parsed.recipes?.length ? parsed.recipes : SAMPLE_RECIPES,
@@ -293,8 +333,14 @@ function loadState() {
       homeIngredients: parsed.homeIngredients || [],
       manualGroceries: parsed.manualGroceries || [],
       groceryChecked: parsed.groceryChecked || {},
+      appliedImports: parsed.appliedImports || [],
       activeTab: getInitialActiveTab(parsed.activeTab || "planner"),
     };
+    const importedState = applyBuiltInImports(loadedState);
+    if (importedState.changed) {
+      persistState(importedState.state);
+    }
+    return importedState.state;
   } catch (error) {
     console.warn("Could not load saved food planner data", error);
     return defaultState(todayWeekStart);
@@ -311,7 +357,27 @@ function defaultState(weekStart) {
     homeIngredients: [],
     manualGroceries: [],
     groceryChecked: {},
+    appliedImports: [],
   };
+}
+
+function applyBuiltInImports(nextState) {
+  const appliedImports = Array.isArray(nextState.appliedImports) ? nextState.appliedImports : [];
+  if (appliedImports.includes(PANTRY_PHOTO_IMPORT_ID)) {
+    nextState.appliedImports = appliedImports;
+    return { state: nextState, changed: false };
+  }
+
+  nextState.homeIngredients = Array.isArray(nextState.homeIngredients)
+    ? nextState.homeIngredients
+    : [];
+
+  parseIngredientLines(PANTRY_PHOTO_IMPORT_LINES).forEach((item) => {
+    mergeHomeIngredient(nextState.homeIngredients, item);
+  });
+
+  nextState.appliedImports = [...appliedImports, PANTRY_PHOTO_IMPORT_ID];
+  return { state: nextState, changed: true };
 }
 
 function getInitialActiveTab(fallback) {
@@ -363,7 +429,15 @@ function seedPlanItems(weekStart) {
 }
 
 function saveState() {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+  persistState(state);
+}
+
+function persistState(nextState) {
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(nextState));
+  } catch (error) {
+    console.warn("Could not save food planner data", error);
+  }
 }
 
 function saveAndRender() {
@@ -1203,9 +1277,13 @@ function addRecipeToFirstOpenDinner(recipeId) {
 }
 
 function addHomeIngredient(item) {
+  mergeHomeIngredient(state.homeIngredients, item);
+}
+
+function mergeHomeIngredient(homeIngredients, item) {
   const cleanName = item.name.trim();
   if (!cleanName) {
-    return;
+    return false;
   }
 
   const next = {
@@ -1216,17 +1294,18 @@ function addHomeIngredient(item) {
     category: normalizeCategory(item.category),
     useSoon: Boolean(item.useSoon),
   };
-  const existing = state.homeIngredients.find((entry) => ingredientNamesMatch(entry.name, next.name));
+  const existing = homeIngredients.find((entry) => ingredientNamesMatch(entry.name, next.name));
 
   if (existing) {
     existing.amount = next.amount || existing.amount;
     existing.unit = next.unit || existing.unit;
     existing.category = next.category || existing.category;
     existing.useSoon = existing.useSoon || next.useSoon;
-    return;
+    return false;
   }
 
-  state.homeIngredients.push(next);
+  homeIngredients.push(next);
+  return true;
 }
 
 function addChloeFavorite(item) {
