@@ -7,7 +7,7 @@
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-title" content="Food Planner" />
     <title>Family Food Planner</title>
-    <link rel="manifest" href="manifest.webmanifest?v=7" />
+    <link rel="manifest" href="manifest.webmanifest?v=8" />
     <link rel="icon" href="assets/app-icon.svg" type="image/svg+xml" />
     <link rel="apple-touch-icon" href="assets/app-icon.svg" />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
@@ -16,12 +16,20 @@
       href="https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,600;9..40,700&display=swap"
       rel="stylesheet"
     />
-    <link rel="stylesheet" href="styles.css?v=7" />
+    <link rel="stylesheet" href="styles.css?v=8" />
   </head>
   <body>
     <div class="app-shell">
+      <header class="app-topbar">
+        <div class="brand-mark" aria-hidden="true">FP</div>
+        <div class="brand-copy">
+          <strong>Food Planner</strong>
+          <span id="appSyncLine">Saved on this device</span>
+        </div>
+      </header>
+
       <main>
-        <section class="dashboard-grid hidden-summary" aria-label="Weekly summary">
+        <section class="dashboard-grid" aria-label="Weekly summary">
           <article class="metric">
             <span>Meals planned</span>
             <strong id="plannedCount">0</strong>
@@ -421,10 +429,11 @@
           <span>Groceries</span>
         </button>
       </nav>
+      <div class="toast hidden" id="toast" role="status" aria-live="polite"></div>
       <div class="home-indicator" aria-hidden="true"></div>
     </div>
 
-    <script src="firebase-config.js?v=7"></script>
-    <script src="app.js?v=7"></script>
+    <script src="firebase-config.js?v=8"></script>
+    <script src="app.js?v=8"></script>
   </body>
 </html>

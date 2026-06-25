@@ -1,7 +1,7 @@
 const STORAGE_KEY = "familyFoodPlanner.v1";
 const SYNC_SETTINGS_KEY = "familyFoodPlanner.sync.v1";
 const DEVICE_ID_KEY = "familyFoodPlanner.deviceId.v1";
-const APP_CACHE_VERSION = "7";
+const APP_CACHE_VERSION = "8";
 const SYNC_SAVE_DEBOUNCE_MS = 900;
 const FIREBASE_APP_URL = "https://www.gstatic.com/firebasejs/10.12.5/firebase-app.js";
 const FIREBASE_FIRESTORE_URL = "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
@@ -254,6 +254,7 @@ const SAMPLE_RECIPES = [
 
 const els = {
   previousWeek: document.querySelector("#previousWeek"),
+  appSyncLine: document.querySelector("#appSyncLine"),
   nextWeek: document.querySelector("#nextWeek"),
   todayButton: document.querySelector("#todayButton"),
   weekLabel: document.querySelector("#weekLabel"),
@@ -326,9 +327,11 @@ const els = {
   clearCheckedGroceries: document.querySelector("#clearCheckedGroceries"),
   printGroceries: document.querySelector("#printGroceries"),
   groceryList: document.querySelector("#groceryList"),
+  toast: document.querySelector("#toast"),
 };
 
 let quickOffset = 0;
+let toastTimer = 0;
 let state = loadState();
 const syncState = createSyncState();
 
@@ -724,14 +727,15 @@ function renderWeekGrid(weekDates) {
   const dayPills = weekDates
     .map((date) => {
       const iso = toIso(date);
-      const hasMeals = meals.some((meal) => meal.date === iso);
+      const dayMealCount = meals.filter((meal) => meal.date === iso).length;
+      const hasMeals = dayMealCount > 0;
       const selected = iso === selectedIso;
 
       return `
         <button class="day-pill ${selected ? "selected" : ""}" type="button" data-action="select-day" data-date="${iso}">
           <span>${escapeHtml(formatDate(date, { weekday: "short" }).slice(0, 1))}</span>
           <strong>${escapeHtml(formatDate(date, { day: "numeric" }))}</strong>
-          ${hasMeals ? `<i aria-hidden="true"></i>` : ""}
+          ${hasMeals ? `<em>${dayMealCount}</em>` : ""}
         </button>
       `;
     })
@@ -859,7 +863,7 @@ function renderGroceries() {
   const grouped = groupByCategory(items);
 
   if (!items.length && !alreadyHome.length) {
-    els.groceryList.innerHTML = `<div class="empty-wide"><strong>No groceries yet</strong></div>`;
+    els.groceryList.innerHTML = `<div class="empty-wide"><strong>No groceries yet</strong><span>Plan meals or add an item.</span></div>`;
     return;
   }
 
@@ -898,8 +902,29 @@ function renderGroceries() {
     `;
   }).join("");
 
+  const grocerySummaryHtml = items.length ? renderGrocerySummary(items) : "";
   const alreadyHomeHtml = renderAlreadyHomeSection(alreadyHome);
-  els.groceryList.innerHTML = `${groceryHtml}${alreadyHomeHtml}`;
+  els.groceryList.innerHTML = `${grocerySummaryHtml}${groceryHtml}${alreadyHomeHtml}`;
+}
+
+function renderGrocerySummary(items) {
+  const checkedCount = items.filter((item) => Boolean(state.groceryChecked[item.key])).length;
+  const totalCount = items.length;
+  const percent = totalCount ? Math.round((checkedCount / totalCount) * 100) : 0;
+  const remaining = totalCount - checkedCount;
+  const remainingText = remaining === 1 ? "1 left" : `${remaining} left`;
+
+  return `
+    <section class="grocery-summary" aria-label="Shopping progress">
+      <div class="grocery-summary-top">
+        <span>Shopping progress</span>
+        <strong>${escapeHtml(remainingText)}</strong>
+      </div>
+      <div class="grocery-progress" aria-hidden="true">
+        <span style="width: ${percent}%"></span>
+      </div>
+    </section>
+  `;
 }
 
 function renderHome() {
@@ -918,6 +943,11 @@ function renderSyncStatus() {
   }
 
   els.syncStatus.textContent = syncState.message;
+  if (els.appSyncLine) {
+    els.appSyncLine.textContent = syncState.settings.enabled
+      ? syncState.message
+      : "Saved on this device";
+  }
   els.syncBadge.textContent = getSyncBadgeLabel();
   els.syncBadge.className = `sync-badge ${syncState.status}`;
   els.syncNow.disabled = syncState.status === "syncing";
@@ -1100,6 +1130,7 @@ function handleMealSubmit(event) {
   state.selectedDate = meal.date;
   resetMealForm(false);
   saveAndRender();
+  showToast(editingId ? "Meal updated" : "Meal added");
 }
 
 function handleWeekClick(event) {
@@ -1140,6 +1171,7 @@ function handleWeekClick(event) {
   if (action === "toggle-done") {
     meal.done = !meal.done;
     saveAndRender();
+    showToast(meal.done ? "Meal marked done" : "Meal reopened");
   }
 
   if (action === "edit-meal") {
@@ -1149,6 +1181,7 @@ function handleWeekClick(event) {
   if (action === "remove-meal") {
     state.planItems = state.planItems.filter((item) => item.id !== id);
     saveAndRender();
+    showToast("Meal removed");
   }
 }
 
@@ -1187,6 +1220,7 @@ function handleRecipeSubmit(event) {
 
   resetRecipeForm(false);
   saveAndRender();
+  showToast(editingId ? "Recipe updated" : "Recipe saved");
 }
 
 function handleRecipeImportSubmit(event) {
@@ -1207,6 +1241,7 @@ function handleRecipeImportSubmit(event) {
   resetRecipeForm(false);
   state.activeTab = "recipes";
   saveAndRender();
+  showToast("Recipe imported");
 }
 
 function handleRecipeClick(event) {
@@ -1242,6 +1277,7 @@ function handleRecipeClick(event) {
       meal.recipeId === id ? { ...meal, recipeId: null } : meal,
     );
     saveAndRender();
+    showToast("Recipe deleted");
   }
 }
 
@@ -1264,6 +1300,7 @@ function handleHomeIngredientSubmit(event) {
 
   els.homeIngredientForm.reset();
   saveAndRender();
+  showToast("Pantry updated");
 }
 
 function handleBulkHomeSubmit(event) {
@@ -1286,6 +1323,7 @@ function handleBulkHomeSubmit(event) {
 
   els.bulkHomeForm.reset();
   saveAndRender();
+  showToast(`${items.length} pantry ${items.length === 1 ? "item" : "items"} added`);
 }
 
 function handleChloeFavoriteSubmit(event) {
@@ -1303,6 +1341,7 @@ function handleChloeFavoriteSubmit(event) {
 
   els.chloeFavoriteForm.reset();
   saveAndRender();
+  showToast("Favorite added");
 }
 
 function handleSyncSubmit(event) {
@@ -1321,6 +1360,7 @@ function handleSyncSubmit(event) {
   };
   saveSyncSettings(syncState.settings);
   disconnectSyncListener();
+  showToast("Connecting sync");
   initializeSync();
 }
 
@@ -1339,10 +1379,12 @@ function handleSyncNow() {
   saveSyncSettings(syncState.settings);
 
   if (!syncState.docRef) {
+    showToast("Connecting sync");
     initializeSync();
     return;
   }
 
+  showToast("Syncing now");
   pushStateToCloud();
 }
 
@@ -1354,6 +1396,7 @@ function handleSyncDisconnect() {
   saveSyncSettings(syncState.settings);
   disconnectSyncListener();
   setSyncStatus("local", "Saved on this device.");
+  showToast("Sync paused");
 }
 
 function handleChloeFavoriteClick(event) {
@@ -1365,6 +1408,7 @@ function handleChloeFavoriteClick(event) {
   if (button.dataset.action === "remove-favorite") {
     state.chloeFavorites = state.chloeFavorites.filter((item) => item.id !== button.dataset.id);
     saveAndRender();
+    showToast("Favorite removed");
   }
 }
 
@@ -1377,6 +1421,7 @@ function handleHomeIngredientClick(event) {
   if (button.dataset.action === "remove-home") {
     state.homeIngredients = state.homeIngredients.filter((item) => item.id !== button.dataset.id);
     saveAndRender();
+    showToast("Pantry item removed");
   }
 
   if (button.dataset.action === "toggle-use-soon") {
@@ -1386,6 +1431,7 @@ function handleHomeIngredientClick(event) {
     }
     item.useSoon = !item.useSoon;
     saveAndRender();
+    showToast(item.useSoon ? "Marked use soon" : "Use soon removed");
   }
 }
 
@@ -1418,6 +1464,7 @@ function handleManualGrocerySubmit(event) {
 
   els.manualGroceryForm.reset();
   saveAndRender();
+  showToast("Grocery added");
 }
 
 function handleGroceryChange(event) {
@@ -1440,6 +1487,7 @@ function handleGroceryClick(event) {
     state.manualGroceries = state.manualGroceries.filter((item) => item.id !== button.dataset.id);
     delete state.groceryChecked[`manual|${button.dataset.id}`];
     saveAndRender();
+    showToast("Grocery removed");
   }
 }
 
@@ -1669,6 +1717,19 @@ function setSyncStatus(status, message) {
   renderSyncStatus();
 }
 
+function showToast(message) {
+  if (!els.toast) {
+    return;
+  }
+
+  window.clearTimeout(toastTimer);
+  els.toast.textContent = message;
+  els.toast.classList.remove("hidden");
+  toastTimer = window.setTimeout(() => {
+    els.toast.classList.add("hidden");
+  }, 2200);
+}
+
 function addRecipeToFirstOpenDinner(recipeId) {
   const recipe = findRecipe(recipeId);
   if (!recipe) {
@@ -1695,6 +1756,7 @@ function addRecipeToFirstOpenDinner(recipeId) {
   state.activeTab = "planner";
   state.selectedDate = date;
   saveAndRender();
+  showToast(`${recipe.name} planned`);
 }
 
 function addHomeIngredient(item) {

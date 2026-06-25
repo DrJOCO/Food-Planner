@@ -1,11 +1,11 @@
-const CACHE_NAME = "family-food-planner-v7";
+const CACHE_NAME = "family-food-planner-v8";
 const APP_SHELL = [
   "./",
   "./index.html",
-  "./styles.css?v=7",
-  "./app.js?v=7",
-  "./firebase-config.js?v=7",
-  "./manifest.webmanifest?v=7",
+  "./styles.css?v=8",
+  "./app.js?v=8",
+  "./firebase-config.js?v=8",
+  "./manifest.webmanifest?v=8",
   "./assets/app-icon.svg",
   "./assets/kitchen-planning-banner.png",
 ];
@@ -35,6 +35,25 @@ self.addEventListener("fetch", (event) => {
 
   const requestUrl = new URL(event.request.url);
   if (requestUrl.origin !== self.location.origin) {
+    return;
+  }
+
+  if (
+    event.request.mode === "navigate" ||
+    requestUrl.pathname.endsWith("/") ||
+    requestUrl.pathname.endsWith("/index.html")
+  ) {
+    event.respondWith(
+      fetch(event.request)
+        .then((response) => {
+          const responseCopy = response.clone();
+          caches.open(CACHE_NAME).then((cache) => {
+            cache.put("./index.html", responseCopy);
+          });
+          return response;
+        })
+        .catch(() => caches.match("./index.html")),
+    );
     return;
   }
 

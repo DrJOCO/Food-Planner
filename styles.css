@@ -13,9 +13,12 @@
   --accent-bg: rgba(231, 111, 81, 0.12);
   --secondary-bg: rgba(69, 123, 157, 0.12);
   --page-padding: 24px;
-  --card-radius: 14px;
-  --card-radius-sm: 12px;
+  --card-radius: 12px;
+  --card-radius-sm: 10px;
   --pill-radius: 6px;
+  --success: #62c58c;
+  --success-bg: rgba(98, 197, 140, 0.14);
+  --shadow-soft: 0 12px 28px rgba(0, 0, 0, 0.18);
 }
 
 * {
@@ -37,6 +40,11 @@ body {
   font-family: "DM Sans", ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   line-height: 1.4;
   overflow-x: hidden;
+}
+
+main {
+  display: grid;
+  gap: 18px;
 }
 
 button,
@@ -69,38 +77,94 @@ p {
   min-height: 100dvh;
   margin: 0 auto;
   background: var(--bg);
-  padding: 50px var(--page-padding) 116px;
+  padding: 18px var(--page-padding) 116px;
   box-shadow: 0 24px 48px rgba(0, 0, 0, 0.32);
 }
 
-.app-shell::before {
-  content: "9:41";
-  position: absolute;
-  top: 18px;
-  left: 28px;
-  color: var(--text);
-  font-size: 15px;
-  font-weight: 600;
+.app-topbar {
+  position: sticky;
+  z-index: 35;
+  top: 0;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: -18px calc(var(--page-padding) * -1) 12px;
+  padding: 16px var(--page-padding) 14px;
+  background: linear-gradient(180deg, var(--bg) 78%, rgba(13, 27, 42, 0));
+}
+
+.brand-mark {
+  display: grid;
+  width: 38px;
+  height: 38px;
+  flex: 0 0 auto;
+  place-items: center;
+  border-radius: 10px;
+  background: var(--accent);
+  color: #ffffff;
+  font-size: 13px;
+  font-weight: 800;
   line-height: 1;
 }
 
-.app-shell::after {
-  content: "";
-  position: absolute;
-  top: 17px;
-  right: 28px;
-  width: 20px;
-  height: 11px;
-  background:
-    linear-gradient(var(--muted), var(--muted)) 0 8px / 3px 3px no-repeat,
-    linear-gradient(var(--muted), var(--muted)) 5px 6px / 3px 5px no-repeat,
-    linear-gradient(var(--muted), var(--muted)) 10px 4px / 3px 7px no-repeat,
-    linear-gradient(var(--muted), var(--muted)) 15px 1px / 3px 10px no-repeat;
-  border-radius: 2px;
+.brand-copy {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
 }
 
-.hidden-summary {
+.brand-copy strong {
+  color: var(--text);
+  font-size: 15px;
+  font-weight: 700;
+  line-height: 1.2;
+}
+
+.brand-copy span {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.2;
+}
+
+.dashboard-grid {
+  display: grid;
+  grid-auto-columns: minmax(106px, 1fr);
+  grid-auto-flow: column;
+  gap: 8px;
+  overflow-x: auto;
+  padding-bottom: 2px;
+  scroll-snap-type: x proximity;
+  scrollbar-width: none;
+}
+
+.dashboard-grid::-webkit-scrollbar {
   display: none;
+}
+
+.metric {
+  display: grid;
+  min-height: 70px;
+  align-content: space-between;
+  gap: 8px;
+  scroll-snap-align: start;
+  border: 1px solid var(--border);
+  border-radius: var(--card-radius-sm);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.035), rgba(255, 255, 255, 0.015));
+  padding: 12px;
+}
+
+.metric span {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.2;
+}
+
+.metric strong {
+  color: var(--text);
+  font-size: 22px;
+  font-weight: 800;
+  line-height: 1;
 }
 
 .view {
@@ -116,7 +180,7 @@ p {
   align-items: flex-start;
   justify-content: space-between;
   gap: 16px;
-  margin-bottom: 14px;
+  margin-bottom: 18px;
 }
 
 .screen-header h1 {
@@ -143,7 +207,7 @@ p {
 .week-actions {
   display: flex;
   align-items: center;
-  gap: 14px;
+  gap: 8px;
   padding-top: 2px;
 }
 
@@ -161,20 +225,25 @@ p {
 }
 
 .icon-button {
-  min-width: 20px;
-  min-height: 30px;
-  padding: 0;
-  color: var(--muted);
+  display: grid;
+  min-width: 34px;
+  min-height: 34px;
+  place-items: center;
+  border-radius: 9px;
+  background: var(--surface);
+  color: var(--text);
   font-size: 22px;
   line-height: 1;
 }
 
 .text-button {
-  min-height: 30px;
-  padding: 0;
+  min-height: 34px;
+  border-radius: 9px;
+  background: var(--secondary-bg);
+  padding: 0 12px;
   color: var(--secondary);
   font-size: 13px;
-  font-weight: 500;
+  font-weight: 700;
 }
 
 .align-left {
@@ -184,10 +253,12 @@ p {
 .ghost-button,
 .small-button,
 .add-day-button {
-  min-height: 30px;
+  min-height: 34px;
+  border-radius: 9px;
   color: var(--muted);
   font-size: 12px;
-  font-weight: 500;
+  font-weight: 700;
+  padding: 0 10px;
 }
 
 .primary-button {
@@ -198,6 +269,7 @@ p {
   font-size: 14px;
   font-weight: 700;
   padding: 0 16px;
+  box-shadow: 0 10px 20px rgba(231, 111, 81, 0.16);
 }
 
 .tab-bar {
@@ -212,7 +284,8 @@ p {
   justify-content: space-around;
   align-items: flex-start;
   border-top: 1px solid var(--border);
-  background: var(--bg);
+  background: rgba(13, 27, 42, 0.94);
+  backdrop-filter: blur(14px);
   padding: 10px 0 32px;
 }
 
@@ -242,6 +315,10 @@ p {
 .tab-button.active {
   color: var(--accent);
   font-weight: 600;
+}
+
+.tab-button.active svg {
+  stroke-width: 2.2;
 }
 
 .home-indicator {
@@ -288,6 +365,7 @@ p {
   align-items: center;
   justify-content: center;
   gap: 3px;
+  border: 1px solid transparent;
   border-radius: 10px;
   background: var(--surface);
   color: var(--muted);
@@ -307,20 +385,30 @@ p {
   line-height: 1;
 }
 
-.day-pill i {
-  width: 4px;
-  height: 4px;
-  border-radius: 50%;
-  background: var(--accent);
+.day-pill em {
+  display: grid;
+  min-width: 16px;
+  height: 16px;
+  place-items: center;
+  border-radius: 999px;
+  background: var(--accent-bg);
+  color: var(--accent);
+  font-size: 10px;
+  font-style: normal;
+  font-weight: 800;
+  line-height: 1;
 }
 
 .day-pill.selected {
+  border-color: rgba(255, 255, 255, 0.12);
   background: var(--accent);
   color: #ffffff;
+  box-shadow: 0 10px 20px rgba(231, 111, 81, 0.16);
 }
 
-.day-pill.selected i {
-  background: rgba(255, 255, 255, 0.55);
+.day-pill.selected em {
+  background: rgba(255, 255, 255, 0.22);
+  color: #ffffff;
 }
 
 .selected-day-heading,
@@ -357,6 +445,7 @@ p {
 .quick-pick,
 .tool-panel,
 .favorite-item {
+  border: 1px solid var(--border);
   border-radius: var(--card-radius);
   background: var(--surface);
 }
@@ -375,6 +464,14 @@ p {
 
 .meal-card.done {
   opacity: 0.62;
+}
+
+.meal-card.everyone {
+  border-color: rgba(98, 197, 140, 0.18);
+}
+
+.meal-card.chloe {
+  border-color: rgba(231, 111, 81, 0.22);
 }
 
 .meal-card > div:first-child {
@@ -417,7 +514,7 @@ p {
 .meal-actions,
 .recipe-actions,
 .row-actions {
-  gap: 14px;
+  gap: 8px;
 }
 
 .pill {
@@ -442,6 +539,16 @@ p {
 .pill.tag {
   background: var(--secondary-bg);
   color: var(--secondary);
+}
+
+.pill.everyone {
+  background: var(--success-bg);
+  color: var(--success);
+}
+
+.pill.chloe {
+  background: var(--accent-bg);
+  color: var(--accent);
 }
 
 .meal-meta,
@@ -471,7 +578,7 @@ p {
 
 .quick-pick {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 30px;
+  grid-template-columns: minmax(0, 1fr) 36px;
   gap: 12px;
   align-items: center;
   border-radius: var(--card-radius-sm);
@@ -493,8 +600,8 @@ p {
 
 .add-button {
   display: grid;
-  width: 30px;
-  height: 30px;
+  width: 36px;
+  height: 36px;
   place-items: center;
   border-radius: 8px;
   background: var(--accent-bg);
@@ -507,6 +614,7 @@ p {
   display: grid;
   gap: 14px;
   margin-top: 4px;
+  box-shadow: var(--shadow-soft);
 }
 
 .panel-heading {
@@ -546,7 +654,7 @@ select,
 textarea {
   width: 100%;
   min-width: 0;
-  border: 1px solid transparent;
+  border: 1px solid var(--border);
   border-radius: 10px;
   background: var(--surface-raised);
   color: var(--text);
@@ -568,6 +676,52 @@ textarea:focus,
 button:focus-visible {
   outline: 2px solid rgba(69, 123, 157, 0.75);
   outline-offset: 2px;
+}
+
+button,
+input,
+select,
+textarea,
+.meal-card,
+.recipe-card,
+.recommendation-card,
+.quick-pick,
+.favorite-item,
+.home-item,
+.grocery-item {
+  transition:
+    border-color 160ms ease,
+    background-color 160ms ease,
+    box-shadow 160ms ease,
+    color 160ms ease,
+    opacity 160ms ease,
+    transform 160ms ease;
+}
+
+button:active,
+.quick-pick:active,
+.recipe-card:active,
+.recommendation-card:active,
+.favorite-item:active {
+  transform: translateY(1px);
+}
+
+@media (hover: hover) {
+  .small-button:hover,
+  .ghost-button:hover,
+  .text-button:hover,
+  .icon-button:hover,
+  .add-day-button:hover {
+    background: rgba(255, 255, 255, 0.045);
+  }
+
+  .meal-card:hover,
+  .recipe-card:hover,
+  .recommendation-card:hover,
+  .quick-pick:hover,
+  .favorite-item:hover {
+    border-color: rgba(255, 255, 255, 0.12);
+  }
 }
 
 .form-row {
@@ -746,6 +900,7 @@ button:focus-visible {
 
 .recipe-actions .small-button:first-child,
 .recommendation-card .small-button:first-child {
+  background: var(--accent-bg);
   color: var(--accent);
 }
 
@@ -886,6 +1041,48 @@ button:focus-visible {
   gap: 18px;
 }
 
+.grocery-summary {
+  display: grid;
+  gap: 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--card-radius);
+  background: linear-gradient(180deg, var(--surface), rgba(27, 45, 68, 0.72));
+  padding: 16px;
+}
+
+.grocery-summary-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.grocery-summary span {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.grocery-summary strong {
+  color: var(--text);
+  font-size: 18px;
+  font-weight: 800;
+}
+
+.grocery-progress {
+  height: 7px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--surface-raised);
+}
+
+.grocery-progress span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--success);
+}
+
 .grocery-group {
   display: grid;
   gap: 0;
@@ -1021,6 +1218,33 @@ button:focus-visible {
   display: none !important;
 }
 
+.toast {
+  position: fixed;
+  z-index: 60;
+  right: max(16px, calc((100vw - 430px) / 2 + 16px));
+  bottom: 96px;
+  max-width: min(330px, calc(100vw - 32px));
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 999px;
+  background: rgba(27, 45, 68, 0.96);
+  box-shadow: 0 16px 34px rgba(0, 0, 0, 0.28);
+  color: var(--text);
+  padding: 11px 14px;
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1.25;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    transition-duration: 0.001ms !important;
+    animation-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
 @media (min-width: 760px) {
   .app-shell {
     margin-top: 28px;
@@ -1030,8 +1254,62 @@ button:focus-visible {
   }
 }
 
+@media (min-width: 900px) {
+  :root {
+    --page-padding: 32px;
+  }
+
+  .app-shell {
+    max-width: 1080px;
+    padding-bottom: 104px;
+  }
+
+  .app-topbar {
+    margin-bottom: 14px;
+  }
+
+  .dashboard-grid {
+    grid-template-columns: repeat(6, minmax(0, 1fr));
+    grid-auto-flow: initial;
+    overflow: visible;
+  }
+
+  .planner-layout,
+  .recipes-layout,
+  .home-layout,
+  .grocery-layout {
+    grid-template-columns: minmax(0, 1fr) 340px;
+    align-items: start;
+  }
+
+  .tool-panel {
+    position: sticky;
+    top: 86px;
+    margin-top: 0;
+  }
+
+  .favorite-list {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+
+  .tab-bar {
+    max-width: 1080px;
+  }
+
+  .toast {
+    right: max(24px, calc((100vw - 1080px) / 2 + 24px));
+  }
+}
+
 @media (max-width: 390px) {
   .app-shell {
+    padding-right: 18px;
+    padding-left: 18px;
+  }
+
+  .app-topbar {
+    margin-right: -18px;
+    margin-left: -18px;
     padding-right: 18px;
     padding-left: 18px;
   }
