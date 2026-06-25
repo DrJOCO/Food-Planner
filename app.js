@@ -1,4 +1,19 @@
 const STORAGE_KEY = "familyFoodPlanner.v1";
+const SYNC_SETTINGS_KEY = "familyFoodPlanner.sync.v1";
+const DEVICE_ID_KEY = "familyFoodPlanner.deviceId.v1";
+const APP_CACHE_VERSION = "7";
+const SYNC_SAVE_DEBOUNCE_MS = 900;
+const FIREBASE_APP_URL = "https://www.gstatic.com/firebasejs/10.12.5/firebase-app.js";
+const FIREBASE_FIRESTORE_URL = "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
+const SYNCED_STATE_FIELDS = [
+  "recipes",
+  "planItems",
+  "chloeFavorites",
+  "homeIngredients",
+  "manualGroceries",
+  "groceryChecked",
+  "appliedImports",
+];
 
 const CATEGORY_ORDER = [
   "Produce",
@@ -87,7 +102,23 @@ const UNIT_WORDS = new Set([
   "pints",
   "qt",
   "tbsp",
+  "tablespoon",
+  "tablespoons",
   "tsp",
+  "teaspoon",
+  "teaspoons",
+  "gram",
+  "grams",
+  "kg",
+  "liter",
+  "liters",
+  "ml",
+  "ounce",
+  "ounces",
+  "pound",
+  "pounds",
+  "slice",
+  "slices",
 ]);
 
 const SAMPLE_RECIPES = [
@@ -266,6 +297,9 @@ const els = {
   recipeFilter: document.querySelector("#recipeFilter"),
   recipeTotal: document.querySelector("#recipeTotal"),
   recipeList: document.querySelector("#recipeList"),
+  recipeImportForm: document.querySelector("#recipeImportForm"),
+  recipeImportText: document.querySelector("#recipeImportText"),
+  recipeImportStatus: document.querySelector("#recipeImportStatus"),
   homeIngredientForm: document.querySelector("#homeIngredientForm"),
   homeIngredientName: document.querySelector("#homeIngredientName"),
   homeIngredientAmount: document.querySelector("#homeIngredientAmount"),
@@ -279,6 +313,12 @@ const els = {
   homeRecommendations: document.querySelector("#homeRecommendations"),
   chloeFavoriteList: document.querySelector("#chloeFavoriteList"),
   homeIngredientList: document.querySelector("#homeIngredientList"),
+  syncForm: document.querySelector("#syncForm"),
+  syncHouseholdId: document.querySelector("#syncHouseholdId"),
+  syncStatus: document.querySelector("#syncStatus"),
+  syncBadge: document.querySelector("#syncBadge"),
+  syncNow: document.querySelector("#syncNow"),
+  disconnectSync: document.querySelector("#disconnectSync"),
   manualGroceryForm: document.querySelector("#manualGroceryForm"),
   manualGroceryName: document.querySelector("#manualGroceryName"),
   manualGroceryAmount: document.querySelector("#manualGroceryAmount"),
@@ -290,9 +330,12 @@ const els = {
 
 let quickOffset = 0;
 let state = loadState();
+const syncState = createSyncState();
 
 bindEvents();
 render();
+registerServiceWorker();
+initializeSync();
 
 function ingredient(amount, unit, name, category) {
   return {
@@ -337,6 +380,7 @@ function loadState() {
       appliedImports: parsed.appliedImports || [],
       selectedDate: parsed.selectedDate || toIso(new Date()),
       activeTab: getInitialActiveTab(parsed.activeTab || "planner"),
+      updatedAt: parsed.updatedAt || Date.now(),
     };
     const importedState = applyBuiltInImports(loadedState);
     if (importedState.changed) {
@@ -361,6 +405,24 @@ function defaultState(weekStart) {
     groceryChecked: {},
     appliedImports: [],
     selectedDate: toIso(new Date()),
+    updatedAt: Date.now(),
+  };
+}
+
+function createSyncState() {
+  return {
+    deviceId: getDeviceId(),
+    settings: loadSyncSettings(),
+    status: "local",
+    message: "Saved on this device.",
+    db: null,
+    docRef: null,
+    firestore: null,
+    unsubscribe: null,
+    pushTimer: null,
+    currentHouseholdId: "",
+    receivedFirstSnapshot: false,
+    isApplyingRemote: false,
   };
 }
 
@@ -432,7 +494,9 @@ function seedPlanItems(weekStart) {
 }
 
 function saveState() {
+  state.updatedAt = Date.now();
   persistState(state);
+  queueSyncPush();
 }
 
 function persistState(nextState) {
@@ -491,6 +555,7 @@ function bindEvents() {
 
   els.weekGrid.addEventListener("click", handleWeekClick);
   els.recipeForm.addEventListener("submit", handleRecipeSubmit);
+  els.recipeImportForm.addEventListener("submit", handleRecipeImportSubmit);
   els.cancelRecipeEdit.addEventListener("click", () => {
     resetRecipeForm(true);
   });
@@ -500,6 +565,9 @@ function bindEvents() {
   els.homeIngredientForm.addEventListener("submit", handleHomeIngredientSubmit);
   els.bulkHomeForm.addEventListener("submit", handleBulkHomeSubmit);
   els.chloeFavoriteForm.addEventListener("submit", handleChloeFavoriteSubmit);
+  els.syncForm.addEventListener("submit", handleSyncSubmit);
+  els.syncNow.addEventListener("click", handleSyncNow);
+  els.disconnectSync.addEventListener("click", handleSyncDisconnect);
   els.chloeFavoriteList.addEventListener("click", handleChloeFavoriteClick);
   els.homeIngredientList.addEventListener("click", handleHomeIngredientClick);
   els.homeRecommendations.addEventListener("click", handleRecommendationClick);
@@ -529,6 +597,7 @@ function render() {
   renderRecipes();
   renderHome();
   renderGroceries();
+  renderSyncStatus();
 }
 
 function renderTabs() {
@@ -839,6 +908,38 @@ function renderHome() {
   renderHomeIngredientList();
 }
 
+function renderSyncStatus() {
+  if (!els.syncStatus || !els.syncBadge) {
+    return;
+  }
+
+  if (document.activeElement !== els.syncHouseholdId) {
+    els.syncHouseholdId.value = syncState.settings.householdId || "";
+  }
+
+  els.syncStatus.textContent = syncState.message;
+  els.syncBadge.textContent = getSyncBadgeLabel();
+  els.syncBadge.className = `sync-badge ${syncState.status}`;
+  els.syncNow.disabled = syncState.status === "syncing";
+  els.disconnectSync.classList.toggle("hidden", !syncState.settings.enabled);
+}
+
+function getSyncBadgeLabel() {
+  if (syncState.status === "synced") {
+    return "Synced";
+  }
+  if (syncState.status === "syncing") {
+    return "Syncing";
+  }
+  if (syncState.status === "ready") {
+    return "Ready";
+  }
+  if (syncState.status === "error") {
+    return "Needs setup";
+  }
+  return "Local";
+}
+
 function renderHomeRecommendations() {
   if (!state.homeIngredients.length && !state.chloeFavorites.length) {
     els.homeRecommendations.innerHTML = `<div class="empty-wide"><strong>Add home ingredients or Chloe favorites first</strong></div>`;
@@ -1088,6 +1189,26 @@ function handleRecipeSubmit(event) {
   saveAndRender();
 }
 
+function handleRecipeImportSubmit(event) {
+  event.preventDefault();
+
+  const importedRecipe = parseRecipeImport(els.recipeImportText.value);
+  if (!importedRecipe) {
+    els.recipeImportStatus.textContent = "Paste a recipe with a name and ingredients.";
+    els.recipeImportText.focus();
+    return;
+  }
+
+  state.recipes.push(importedRecipe);
+  els.recipeImportText.value = "";
+  els.recipeImportStatus.textContent = `Imported ${importedRecipe.name}.`;
+  els.recipeSearch.value = "";
+  els.recipeFilter.value = "all";
+  resetRecipeForm(false);
+  state.activeTab = "recipes";
+  saveAndRender();
+}
+
 function handleRecipeClick(event) {
   const button = event.target.closest("button[data-action]");
   if (!button) {
@@ -1184,6 +1305,57 @@ function handleChloeFavoriteSubmit(event) {
   saveAndRender();
 }
 
+function handleSyncSubmit(event) {
+  event.preventDefault();
+
+  const householdId = normalizeHouseholdId(els.syncHouseholdId.value);
+  if (!householdId) {
+    setSyncStatus("error", "Add a household code first.");
+    els.syncHouseholdId.focus();
+    return;
+  }
+
+  syncState.settings = {
+    enabled: true,
+    householdId,
+  };
+  saveSyncSettings(syncState.settings);
+  disconnectSyncListener();
+  initializeSync();
+}
+
+function handleSyncNow() {
+  const householdId = normalizeHouseholdId(els.syncHouseholdId.value || syncState.settings.householdId);
+  if (!householdId) {
+    setSyncStatus("error", "Add a household code first.");
+    els.syncHouseholdId.focus();
+    return;
+  }
+
+  syncState.settings = {
+    enabled: true,
+    householdId,
+  };
+  saveSyncSettings(syncState.settings);
+
+  if (!syncState.docRef) {
+    initializeSync();
+    return;
+  }
+
+  pushStateToCloud();
+}
+
+function handleSyncDisconnect() {
+  syncState.settings = {
+    enabled: false,
+    householdId: syncState.settings.householdId || "",
+  };
+  saveSyncSettings(syncState.settings);
+  disconnectSyncListener();
+  setSyncStatus("local", "Saved on this device.");
+}
+
 function handleChloeFavoriteClick(event) {
   const button = event.target.closest("button[data-action]");
   if (!button) {
@@ -1269,6 +1441,232 @@ function handleGroceryClick(event) {
     delete state.groceryChecked[`manual|${button.dataset.id}`];
     saveAndRender();
   }
+}
+
+async function initializeSync() {
+  if (!syncState.settings.enabled) {
+    setSyncStatus("local", "Saved on this device.");
+    return;
+  }
+
+  const householdId = normalizeHouseholdId(syncState.settings.householdId);
+  if (!householdId) {
+    setSyncStatus("error", "Add a household code first.");
+    return;
+  }
+
+  syncState.settings.householdId = householdId;
+  saveSyncSettings(syncState.settings);
+
+  if (syncState.docRef && syncState.currentHouseholdId === householdId) {
+    setSyncStatus("ready", `Connected to ${householdId}.`);
+    return;
+  }
+
+  const firebaseConfig = getFirebaseConfig();
+  if (!firebaseConfig) {
+    setSyncStatus("error", "Firebase config missing.");
+    return;
+  }
+
+  disconnectSyncListener();
+  setSyncStatus("syncing", "Connecting shared sync...");
+
+  try {
+    const { appModule, firestoreModule } = await loadFirebaseModules();
+    const app = appModule.getApps().length
+      ? appModule.getApp()
+      : appModule.initializeApp(firebaseConfig);
+
+    syncState.db = firestoreModule.getFirestore(app);
+    syncState.firestore = firestoreModule;
+    syncState.currentHouseholdId = householdId;
+    syncState.docRef = firestoreModule.doc(
+      syncState.db,
+      "households",
+      householdId,
+      "foodPlanner",
+      "state",
+    );
+    syncState.receivedFirstSnapshot = false;
+    syncState.unsubscribe = firestoreModule.onSnapshot(
+      syncState.docRef,
+      handleRemoteSnapshot,
+      (error) => {
+        console.warn("Shared sync stopped", error);
+        setSyncStatus("error", "Sync needs Firebase access.");
+      },
+    );
+  } catch (error) {
+    console.warn("Could not start shared sync", error);
+    setSyncStatus("error", "Sync needs Firebase access.");
+  }
+}
+
+function disconnectSyncListener() {
+  if (syncState.unsubscribe) {
+    syncState.unsubscribe();
+  }
+
+  if (syncState.pushTimer) {
+    window.clearTimeout(syncState.pushTimer);
+  }
+
+  syncState.db = null;
+  syncState.docRef = null;
+  syncState.firestore = null;
+  syncState.unsubscribe = null;
+  syncState.pushTimer = null;
+  syncState.currentHouseholdId = "";
+  syncState.receivedFirstSnapshot = false;
+}
+
+function handleRemoteSnapshot(snapshot) {
+  syncState.receivedFirstSnapshot = true;
+
+  if (!snapshot.exists()) {
+    setSyncStatus("syncing", "Creating shared plan...");
+    pushStateToCloud();
+    return;
+  }
+
+  const data = snapshot.data() || {};
+  const remoteState = data.state || {};
+  const remoteUpdatedAt = Number(data.updatedAt || remoteState.updatedAt || 0);
+  const localUpdatedAt = Number(state.updatedAt || 0);
+
+  if (data.deviceId === syncState.deviceId) {
+    setSyncStatus("synced", `Synced ${formatShortTime(new Date())}.`);
+    return;
+  }
+
+  if (remoteUpdatedAt > localUpdatedAt) {
+    applyRemoteState(remoteState, remoteUpdatedAt);
+    setSyncStatus("synced", `Updated ${formatShortTime(new Date())}.`);
+    return;
+  }
+
+  if (remoteUpdatedAt < localUpdatedAt) {
+    setSyncStatus("syncing", "Uploading newer changes...");
+    queueSyncPush(0);
+    return;
+  }
+
+  setSyncStatus("synced", `Synced ${formatShortTime(new Date())}.`);
+}
+
+function applyRemoteState(remoteState, remoteUpdatedAt) {
+  if (!remoteState || typeof remoteState !== "object") {
+    return;
+  }
+
+  syncState.isApplyingRemote = true;
+  const localView = {
+    activeTab: state.activeTab,
+    selectedDate: state.selectedDate,
+    weekStart: state.weekStart,
+  };
+  const nextState = {
+    ...state,
+    updatedAt: remoteUpdatedAt || Date.now(),
+    ...localView,
+  };
+
+  SYNCED_STATE_FIELDS.forEach((field) => {
+    if (Object.prototype.hasOwnProperty.call(remoteState, field)) {
+      nextState[field] = remoteState[field];
+    }
+  });
+
+  state = nextState;
+  persistState(state);
+  render();
+  syncState.isApplyingRemote = false;
+}
+
+function queueSyncPush(delay = SYNC_SAVE_DEBOUNCE_MS) {
+  if (!syncState.settings.enabled || syncState.isApplyingRemote) {
+    return;
+  }
+
+  if (syncState.pushTimer) {
+    window.clearTimeout(syncState.pushTimer);
+  }
+
+  syncState.pushTimer = window.setTimeout(() => {
+    pushStateToCloud();
+  }, delay);
+}
+
+async function pushStateToCloud() {
+  if (!syncState.settings.enabled || syncState.isApplyingRemote) {
+    return;
+  }
+
+  if (!syncState.docRef || !syncState.firestore) {
+    initializeSync();
+    return;
+  }
+
+  const updatedAt = state.updatedAt || Date.now();
+  setSyncStatus("syncing", "Syncing household plan...");
+
+  try {
+    await syncState.firestore.setDoc(
+      syncState.docRef,
+      {
+        app: "family-food-planner",
+        appVersion: APP_CACHE_VERSION,
+        deviceId: syncState.deviceId,
+        householdId: syncState.currentHouseholdId,
+        updatedAt,
+        state: serializeSyncedState(updatedAt),
+        savedAt: syncState.firestore.serverTimestamp(),
+      },
+      { merge: true },
+    );
+    setSyncStatus("synced", `Synced ${formatShortTime(new Date())}.`);
+  } catch (error) {
+    console.warn("Could not sync household plan", error);
+    setSyncStatus("error", "Sync needs Firebase access.");
+  }
+}
+
+async function loadFirebaseModules() {
+  const [appModule, firestoreModule] = await Promise.all([
+    import(FIREBASE_APP_URL),
+    import(FIREBASE_FIRESTORE_URL),
+  ]);
+  return { appModule, firestoreModule };
+}
+
+function serializeSyncedState(updatedAt) {
+  const synced = {
+    updatedAt,
+  };
+  SYNCED_STATE_FIELDS.forEach((field) => {
+    synced[field] = state[field];
+  });
+  return JSON.parse(JSON.stringify(synced));
+}
+
+function getFirebaseConfig() {
+  const config = window.FOOD_PLANNER_FIREBASE_CONFIG;
+  if (!config || typeof config !== "object") {
+    return null;
+  }
+
+  if (!config.apiKey || !config.projectId || !config.appId) {
+    return null;
+  }
+
+  return config;
+}
+
+function setSyncStatus(status, message) {
+  syncState.status = status;
+  syncState.message = message;
+  renderSyncStatus();
 }
 
 function addRecipeToFirstOpenDinner(recipeId) {
@@ -1699,13 +2097,239 @@ function formatHomeItem(item) {
   return [amount, item.name].filter(Boolean).join(" ");
 }
 
+function parseRecipeImport(value) {
+  const lines = String(value || "")
+    .replace(/\r/g, "")
+    .split("\n")
+    .map((line) => cleanImportedLine(line))
+    .filter(Boolean);
+
+  if (!lines.length) {
+    return null;
+  }
+
+  const ingredientHeadingIndex = lines.findIndex(isIngredientHeading);
+  const stepHeadingIndex = lines.findIndex(isStepHeading);
+  const name = findImportedRecipeName(lines, ingredientHeadingIndex, stepHeadingIndex);
+  if (!name) {
+    return null;
+  }
+
+  const ingredientLines = getImportedIngredientLines(lines, ingredientHeadingIndex, stepHeadingIndex);
+  const ingredients = ingredientLines
+    .map((line) => parseImportedIngredientLine(line))
+    .filter(Boolean);
+
+  if (!ingredients.length) {
+    return null;
+  }
+
+  const steps = getImportedStepLines(lines, stepHeadingIndex, ingredientHeadingIndex);
+  const text = lines.join(" ");
+  const minutes = extractMinutes(text);
+  const tags = inferRecipeTags(name, text, minutes);
+
+  return {
+    id: createId(),
+    name,
+    time: minutes ? `${minutes} min` : "",
+    servings: extractServings(text),
+    tags,
+    chloeNote: "",
+    ingredients,
+    steps,
+  };
+}
+
+function findImportedRecipeName(lines, ingredientHeadingIndex, stepHeadingIndex) {
+  const stopIndex = Math.min(
+    ...[ingredientHeadingIndex, stepHeadingIndex].filter((index) => index >= 0),
+    lines.length,
+  );
+  const candidates = lines.slice(0, Number.isFinite(stopIndex) ? stopIndex : lines.length);
+  const title = candidates.find((line) => !isMetadataLine(line) && !isRecipeHeading(line));
+  return title || lines.find((line) => !isRecipeHeading(line) && !isMetadataLine(line)) || "";
+}
+
+function getImportedIngredientLines(lines, ingredientHeadingIndex, stepHeadingIndex) {
+  if (ingredientHeadingIndex >= 0) {
+    const endIndex = stepHeadingIndex > ingredientHeadingIndex ? stepHeadingIndex : lines.length;
+    return lines
+      .slice(ingredientHeadingIndex + 1, endIndex)
+      .filter((line) => !isRecipeHeading(line) && looksLikeIngredient(line));
+  }
+
+  const endIndex = stepHeadingIndex >= 0 ? stepHeadingIndex : lines.length;
+  return lines.slice(1, endIndex).filter(looksLikeIngredient);
+}
+
+function getImportedStepLines(lines, stepHeadingIndex, ingredientHeadingIndex) {
+  if (stepHeadingIndex >= 0) {
+    return lines
+      .slice(stepHeadingIndex + 1)
+      .filter((line) => !isRecipeHeading(line))
+      .map(cleanStepLine);
+  }
+
+  const startIndex = ingredientHeadingIndex >= 0 ? ingredientHeadingIndex + 1 : 1;
+  return lines
+    .slice(startIndex)
+    .filter((line) => !looksLikeIngredient(line) && !isRecipeHeading(line))
+    .map(cleanStepLine);
+}
+
+function parseImportedIngredientLine(line) {
+  const cleanLine = normalizeFractions(line.replace(/\s+/g, " ").trim());
+  if (!cleanLine) {
+    return null;
+  }
+
+  if (cleanLine.includes("|")) {
+    return parseIngredientLine(cleanLine);
+  }
+
+  return parseIngredientLine(`${cleanLine} | ${inferIngredientCategory(cleanLine)}`);
+}
+
+function cleanImportedLine(line) {
+  return normalizeFractions(line)
+    .replace(/^\s*[-*•]\s*/, "")
+    .replace(/^\s*\d+[.)]\s*/, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function cleanStepLine(line) {
+  return line.replace(/^\s*(step\s*)?\d+[.)]\s*/i, "").trim();
+}
+
+function normalizeFractions(value) {
+  return String(value || "")
+    .replace(/¼/g, "1/4")
+    .replace(/½/g, "1/2")
+    .replace(/¾/g, "3/4")
+    .replace(/⅓/g, "1/3")
+    .replace(/⅔/g, "2/3")
+    .replace(/⅛/g, "1/8");
+}
+
+function isRecipeHeading(line) {
+  return isIngredientHeading(line) || isStepHeading(line) || /^(notes?|nutrition|equipment)$/i.test(cleanHeading(line));
+}
+
+function isIngredientHeading(line) {
+  return /^(ingredients?|what you need)$/i.test(cleanHeading(line));
+}
+
+function isStepHeading(line) {
+  return /^(instructions?|directions?|method|preparation|steps?)$/i.test(cleanHeading(line));
+}
+
+function cleanHeading(line) {
+  return String(line || "")
+    .replace(/[#*:]/g, "")
+    .trim()
+    .toLowerCase();
+}
+
+function isMetadataLine(line) {
+  return /^(prep|cook|total|active)?\s*time\b/i.test(line) ||
+    /^(serves|servings|yield|makes)\b/i.test(line) ||
+    /^https?:\/\//i.test(line);
+}
+
+function looksLikeIngredient(line) {
+  if (!line || isMetadataLine(line) || isRecipeHeading(line)) {
+    return false;
+  }
+
+  const normalized = normalizeFractions(line.toLowerCase());
+  return (
+    /^\d/.test(normalized) ||
+    /^(one|two|three|four|five|six|seven|eight|nine|ten|a|an)\b/.test(normalized) ||
+    [...UNIT_WORDS].some((unit) => normalized.includes(` ${unit} `)) ||
+    normalized.includes(" to taste") ||
+    normalized.includes("optional")
+  );
+}
+
+function extractMinutes(text) {
+  const timeText = String(text || "").toLowerCase();
+  const totalMatch =
+    timeText.match(/total\s*time[:\s-]*([^.;\n]{1,40})/) ||
+    timeText.match(/\b(\d+\s*(?:hours?|hrs?|h)\s*)?(\d+\s*(?:minutes?|mins?|min|m))\b/);
+
+  if (!totalMatch) {
+    return 0;
+  }
+
+  const value = totalMatch[1] || totalMatch[0];
+  let minutes = 0;
+  const hourMatch = value.match(/(\d+)\s*(hours?|hrs?|h)\b/);
+  const minuteMatch = value.match(/(\d+)\s*(minutes?|mins?|min|m)\b/);
+  if (hourMatch) {
+    minutes += Number(hourMatch[1]) * 60;
+  }
+  if (minuteMatch) {
+    minutes += Number(minuteMatch[1]);
+  }
+  return minutes;
+}
+
+function extractServings(text) {
+  const match = String(text || "").match(/\b(?:serves|servings|yield|makes)[:\s-]*(\d+)/i);
+  return match ? Number(match[1]) : "";
+}
+
+function inferRecipeTags(name, text, minutes) {
+  const haystack = `${name} ${text}`.toLowerCase();
+  const tags = new Set();
+  if (minutes && minutes <= 30) {
+    tags.add("quick");
+  }
+  if (/kid|toddler|family|children|chloe/.test(haystack)) {
+    tags.add("kid-friendly");
+  }
+  if (/leftover|meal prep|make ahead/.test(haystack)) {
+    tags.add("leftovers");
+  }
+  if (/sheet pan|one pan|one-pot|one pot|skillet/.test(haystack)) {
+    tags.add("one-pan");
+  }
+  return [...tags];
+}
+
+function inferIngredientCategory(line) {
+  const text = line.toLowerCase();
+  if (/\bfrozen\b/.test(text)) {
+    return "Frozen";
+  }
+  if (/\b(chicken|beef|turkey|pork|salmon|fish|shrimp|sausage|bacon|ham|steak)\b/.test(text)) {
+    return "Meat";
+  }
+  if (/\b(milk|cheese|yogurt|egg|eggs|butter|cream|mozzarella|cheddar|parmesan)\b/.test(text)) {
+    return "Dairy";
+  }
+  if (/\b(bread|bun|buns|tortilla|tortillas|bagel|pita)\b/.test(text)) {
+    return "Bakery";
+  }
+  if (
+    /\b(apple|apples|avocado|avocados|banana|bananas|berries|broccoli|carrot|carrots|celery|corn|cucumber|cucumbers|garlic|greens|lettuce|lemon|lime|mushroom|mushrooms|onion|onions|pepper|peppers|potato|potatoes|spinach|tomato|tomatoes|zucchini)\b/.test(
+      text,
+    )
+  ) {
+    return "Produce";
+  }
+  return "Pantry";
+}
+
 function parseIngredientLines(value) {
   return splitLines(value).map(parseIngredientLine).filter(Boolean);
 }
 
 function parseIngredientLine(line) {
   const [leftRaw, categoryRaw] = line.split("|");
-  const left = leftRaw.trim();
+  const left = normalizeFractions(leftRaw).trim();
   if (!left) {
     return null;
   }
@@ -1716,6 +2340,9 @@ function parseIngredientLine(line) {
 
   if (tokens.length && parseAmount(tokens[0]) !== null) {
     amount = tokens.shift();
+    if (tokens.length && /^\d+\/\d+$/.test(tokens[0])) {
+      amount = `${amount} ${tokens.shift()}`;
+    }
   }
 
   if (tokens.length && UNIT_WORDS.has(tokens[0].toLowerCase())) {
@@ -1782,6 +2409,12 @@ function parseAmount(value) {
     return bottom ? top / bottom : null;
   }
 
+  if (/^\d+\s+\d+\/\d+$/.test(text)) {
+    const [whole, fraction] = text.split(/\s+/);
+    const [top, bottom] = fraction.split("/").map(Number);
+    return bottom ? Number(whole) + top / bottom : null;
+  }
+
   if (/^\d+(\.\d+)?$/.test(text)) {
     return Number(text);
   }
@@ -1819,6 +2452,62 @@ function findRecipe(id) {
 
 function findMeal(id) {
   return state.planItems.find((meal) => meal.id === id);
+}
+
+function loadSyncSettings() {
+  try {
+    const raw = localStorage.getItem(SYNC_SETTINGS_KEY);
+    if (!raw) {
+      return {
+        enabled: false,
+        householdId: "",
+      };
+    }
+
+    const parsed = JSON.parse(raw);
+    return {
+      enabled: Boolean(parsed.enabled),
+      householdId: normalizeHouseholdId(parsed.householdId),
+    };
+  } catch (error) {
+    console.warn("Could not load sync settings", error);
+    return {
+      enabled: false,
+      householdId: "",
+    };
+  }
+}
+
+function saveSyncSettings(settings) {
+  try {
+    localStorage.setItem(SYNC_SETTINGS_KEY, JSON.stringify(settings));
+  } catch (error) {
+    console.warn("Could not save sync settings", error);
+  }
+}
+
+function getDeviceId() {
+  try {
+    const existing = localStorage.getItem(DEVICE_ID_KEY);
+    if (existing) {
+      return existing;
+    }
+
+    const deviceId = createId();
+    localStorage.setItem(DEVICE_ID_KEY, deviceId);
+    return deviceId;
+  } catch (error) {
+    return createId();
+  }
+}
+
+function normalizeHouseholdId(value) {
+  return String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9-]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 48);
 }
 
 function audienceToClass(audience) {
@@ -1917,6 +2606,13 @@ function formatDate(date, options) {
   return new Intl.DateTimeFormat("en-US", options).format(date);
 }
 
+function formatShortTime(date) {
+  return new Intl.DateTimeFormat("en-US", {
+    hour: "numeric",
+    minute: "2-digit",
+  }).format(date);
+}
+
 function formatDayOption(date) {
   return formatDate(date, {
     weekday: "short",
@@ -1936,4 +2632,16 @@ function escapeHtml(value) {
 
 function escapeAttribute(value) {
   return escapeHtml(value).replace(/`/g, "&#096;");
+}
+
+function registerServiceWorker() {
+  if (!("serviceWorker" in navigator)) {
+    return;
+  }
+
+  window.addEventListener("load", () => {
+    navigator.serviceWorker.register("./sw.js").catch((error) => {
+      console.warn("Could not register food planner service worker", error);
+    });
+  });
 }

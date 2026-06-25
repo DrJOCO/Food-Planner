@@ -177,6 +177,10 @@ p {
   font-weight: 500;
 }
 
+.align-left {
+  justify-self: start;
+}
+
 .ghost-button,
 .small-button,
 .add-day-button {
@@ -594,6 +598,60 @@ button:focus-visible {
   gap: 10px;
   border-top: 1px solid var(--border);
   padding-top: 14px;
+}
+
+.first-panel-block {
+  border-top: 0;
+  padding-top: 0;
+}
+
+.helper-text {
+  min-height: 17px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 400;
+  letter-spacing: 0;
+  line-height: 1.35;
+  text-transform: none;
+}
+
+.sync-panel {
+  gap: 12px;
+}
+
+.sync-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 18px;
+}
+
+.sync-badge {
+  display: inline-flex;
+  min-height: 22px;
+  align-items: center;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--muted);
+  padding: 4px 8px;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1;
+}
+
+.sync-badge.ready,
+.sync-badge.syncing {
+  background: var(--secondary-bg);
+  color: var(--secondary);
+}
+
+.sync-badge.synced {
+  background: rgba(69, 157, 110, 0.14);
+  color: #62c58c;
+}
+
+.sync-badge.error {
+  background: var(--accent-bg);
+  color: var(--accent);
 }
 
 .filter-row {

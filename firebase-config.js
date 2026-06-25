@@ -1,0 +1,1 @@
+window.FOOD_PLANNER_FIREBASE_CONFIG = null;

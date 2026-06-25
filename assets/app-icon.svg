@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="Family Food Planner">
+  <rect width="512" height="512" rx="112" fill="#0d1b2a"/>
+  <circle cx="256" cy="250" r="142" fill="#152238" stroke="#457b9d" stroke-width="18"/>
+  <path d="M168 246c18 18 46 28 88 28s70-10 88-28" fill="none" stroke="#e8e6e3" stroke-width="22" stroke-linecap="round"/>
+  <path d="M178 188h156" fill="none" stroke="#e76f51" stroke-width="22" stroke-linecap="round"/>
+  <path d="M206 332h100" fill="none" stroke="#457b9d" stroke-width="22" stroke-linecap="round"/>
+  <path d="M140 126v252M372 126v252" fill="none" stroke="#e8e6e3" stroke-width="18" stroke-linecap="round"/>
+</svg>

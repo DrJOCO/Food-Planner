@@ -3,14 +3,20 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#0d1b2a" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-title" content="Food Planner" />
     <title>Family Food Planner</title>
+    <link rel="manifest" href="manifest.webmanifest?v=7" />
+    <link rel="icon" href="assets/app-icon.svg" type="image/svg+xml" />
+    <link rel="apple-touch-icon" href="assets/app-icon.svg" />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
       href="https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,600;9..40,700&display=swap"
       rel="stylesheet"
     />
-    <link rel="stylesheet" href="styles.css?v=6" />
+    <link rel="stylesheet" href="styles.css?v=7" />
   </head>
   <body>
     <div class="app-shell">
@@ -157,6 +163,20 @@
             </section>
 
             <aside class="tool-panel">
+              <div class="bulk-add first-panel-block">
+                <div class="panel-heading compact">
+                  <h2>Import recipe</h2>
+                </div>
+                <form id="recipeImportForm" class="stacked-form">
+                  <label>
+                    Paste recipe
+                    <textarea id="recipeImportText" rows="7" placeholder="Chicken rice bowls&#10;&#10;Ingredients&#10;1 lb chicken breast&#10;2 cups rice&#10;&#10;Instructions&#10;Cook rice.&#10;Sear chicken."></textarea>
+                  </label>
+                  <p class="helper-text" id="recipeImportStatus"></p>
+                  <button class="text-button align-left" type="submit">Import recipe</button>
+                </form>
+              </div>
+
               <div class="panel-heading">
                 <h2 id="recipeFormTitle">Add recipe</h2>
                 <button class="ghost-button hidden" id="cancelRecipeEdit" type="button">Cancel</button>
@@ -302,6 +322,25 @@
                   <button class="text-button" type="submit">Add favorite</button>
                 </form>
               </div>
+
+              <div class="bulk-add sync-panel">
+                <div class="panel-heading compact">
+                  <h2>Shared sync</h2>
+                  <span class="sync-badge" id="syncBadge">Local</span>
+                </div>
+                <form id="syncForm" class="stacked-form">
+                  <label>
+                    Household code
+                    <input id="syncHouseholdId" type="text" placeholder="cheng-family" autocomplete="off" />
+                  </label>
+                  <p class="helper-text" id="syncStatus">Saved on this device.</p>
+                  <div class="sync-actions">
+                    <button class="text-button align-left" type="submit">Connect</button>
+                    <button class="text-button align-left" id="syncNow" type="button">Sync now</button>
+                  </div>
+                  <button class="ghost-button align-left" id="disconnectSync" type="button">Use this phone only</button>
+                </form>
+              </div>
             </aside>
           </div>
         </section>
@@ -385,6 +424,7 @@
       <div class="home-indicator" aria-hidden="true"></div>
     </div>
 
-    <script src="app.js?v=6"></script>
+    <script src="firebase-config.js?v=7"></script>
+    <script src="app.js?v=7"></script>
   </body>
 </html>
