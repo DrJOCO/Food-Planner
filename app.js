@@ -1,7 +1,7 @@
 const STORAGE_KEY = "familyFoodPlanner.v1";
 const SYNC_SETTINGS_KEY = "familyFoodPlanner.sync.v1";
 const DEVICE_ID_KEY = "familyFoodPlanner.deviceId.v1";
-const APP_CACHE_VERSION = "8";
+const APP_CACHE_VERSION = "9";
 const SYNC_SAVE_DEBOUNCE_MS = 900;
 const FIREBASE_APP_URL = "https://www.gstatic.com/firebasejs/10.12.5/firebase-app.js";
 const FIREBASE_FIRESTORE_URL = "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
@@ -27,6 +27,7 @@ const CATEGORY_ORDER = [
 ];
 
 const PANTRY_PHOTO_IMPORT_ID = "pantry-photos-2026-06-24";
+const FAMILY_FAVORITES_IMPORT_ID = "family-favorites-2026-06-25";
 const PANTRY_PHOTO_IMPORT_LINES = `
 Barilla rotini | Pantry
 tri-color rotini | Pantry
@@ -60,6 +61,136 @@ milk | Dairy
 Siggi's yogurt | Dairy
 sparkling water | Pantry
 `;
+
+const FAMILY_FAVORITE_RECIPES = [
+  {
+    id: "recipe-air-fryer-salmon-rice",
+    name: "Air fried salmon and rice",
+    time: "25 min",
+    servings: 3,
+    tags: ["quick", "kid-friendly"],
+    chloeNote: "Flake salmon into small pieces and keep rice plain.",
+    ingredients: [
+      ingredient("1.25", "lb", "salmon", "Meat"),
+      ingredient("1.5", "cups", "rice", "Pantry"),
+      ingredient("1", "bottle", "soy sauce", "Pantry"),
+      ingredient("1", "bottle", "sesame oil", "Pantry"),
+    ],
+    steps: [
+      "Cook rice.",
+      "Season salmon lightly.",
+      "Air fry salmon until cooked through.",
+      "Serve salmon over rice with sauce on the side.",
+    ],
+  },
+  {
+    id: "recipe-soba-noodles",
+    name: "Soba noodles",
+    time: "15 min",
+    servings: 3,
+    tags: ["quick", "kid-friendly", "leftovers"],
+    chloeNote: "Rinse noodles well and serve sauce separately.",
+    ingredients: [
+      ingredient("1", "pack", "soba noodles", "Pantry"),
+      ingredient("1", "bottle", "soba sauce", "Pantry"),
+      ingredient("1", "each", "cucumber", "Produce"),
+      ingredient("1", "bottle", "sesame oil", "Pantry"),
+    ],
+    steps: [
+      "Boil soba noodles.",
+      "Rinse under cold water.",
+      "Slice cucumber.",
+      "Serve with soba sauce on the side.",
+    ],
+  },
+  {
+    id: "recipe-cheese-quesadilla",
+    name: "Cheese quesadilla",
+    time: "10 min",
+    servings: 2,
+    tags: ["quick", "kid-friendly"],
+    chloeNote: "Cut into small triangles and add fruit on the side.",
+    ingredients: [
+      ingredient("2", "each", "tortillas", "Bakery"),
+      ingredient("1", "cup", "shredded cheese", "Dairy"),
+      ingredient("1", "tbsp", "butter", "Dairy"),
+    ],
+    steps: [
+      "Warm tortilla in a pan.",
+      "Add cheese and fold.",
+      "Cook until both sides are lightly crisp.",
+      "Cut into wedges.",
+    ],
+  },
+  {
+    id: "recipe-oatmeal-egg-honey",
+    name: "Oatmeal with egg and honey",
+    time: "10 min",
+    servings: 1,
+    tags: ["quick", "kid-friendly", "breakfast"],
+    chloeNote: "Stir egg in well so the texture stays smooth.",
+    ingredients: [
+      ingredient("1/2", "cup", "oats", "Pantry"),
+      ingredient("1", "each", "egg", "Dairy"),
+      ingredient("1", "tsp", "honey", "Pantry"),
+      ingredient("1", "cup", "milk", "Dairy"),
+    ],
+    steps: [
+      "Cook oats with milk.",
+      "Whisk egg and stir it into the hot oatmeal.",
+      "Cook gently until thick.",
+      "Finish with honey.",
+    ],
+  },
+  {
+    id: "recipe-cheese-omelette",
+    name: "Cheese omelette",
+    time: "10 min",
+    servings: 1,
+    tags: ["quick", "kid-friendly", "breakfast"],
+    chloeNote: "Keep it soft and cut into small strips.",
+    ingredients: [
+      ingredient("2", "each", "eggs", "Dairy"),
+      ingredient("1/4", "cup", "shredded cheese", "Dairy"),
+      ingredient("1", "tbsp", "milk", "Dairy"),
+    ],
+    steps: [
+      "Whisk eggs with milk.",
+      "Cook gently in a nonstick pan.",
+      "Add cheese and fold.",
+    ],
+  },
+  {
+    id: "recipe-fruit-babybel-snack",
+    name: "Fruit and Babybel snack plate",
+    time: "5 min",
+    servings: 1,
+    tags: ["quick", "kid-friendly", "snack"],
+    chloeNote: "Use whichever fruit is ready: tangerines, strawberries, or blueberries.",
+    ingredients: [
+      ingredient("1", "each", "Babybel cheese", "Dairy"),
+      ingredient("1", "each", "tangerine", "Produce"),
+      ingredient("1", "cup", "strawberries", "Produce"),
+      ingredient("1", "cup", "blueberries", "Produce"),
+    ],
+    steps: [
+      "Peel or wash fruit.",
+      "Serve with Babybel cheese.",
+    ],
+  },
+];
+
+const FAMILY_FAVORITE_FOODS = [
+  { name: "air fried salmon and rice", note: "Favorite dinner." },
+  { name: "soba noodles", note: "Works for dinner or leftovers." },
+  { name: "cheese quesadilla", note: "Easy dinner or lunch." },
+  { name: "oatmeal with egg and honey", note: "Breakfast favorite." },
+  { name: "cheese omelette", note: "Breakfast favorite." },
+  { name: "tangerines", note: "Snack staple." },
+  { name: "strawberries", note: "Snack staple." },
+  { name: "blueberries", note: "Snack staple." },
+  { name: "Babybel cheese", note: "Snack staple." },
+];
 
 const SLOT_ORDER = {
   Breakfast: 1,
@@ -431,21 +562,47 @@ function createSyncState() {
 
 function applyBuiltInImports(nextState) {
   const appliedImports = Array.isArray(nextState.appliedImports) ? nextState.appliedImports : [];
-  if (appliedImports.includes(PANTRY_PHOTO_IMPORT_ID)) {
-    nextState.appliedImports = appliedImports;
-    return { state: nextState, changed: false };
-  }
+  let changed = false;
+  nextState.appliedImports = appliedImports;
 
   nextState.homeIngredients = Array.isArray(nextState.homeIngredients)
     ? nextState.homeIngredients
     : [];
+  nextState.recipes = Array.isArray(nextState.recipes) ? nextState.recipes : SAMPLE_RECIPES;
+  nextState.chloeFavorites = Array.isArray(nextState.chloeFavorites)
+    ? nextState.chloeFavorites
+    : [];
 
-  parseIngredientLines(PANTRY_PHOTO_IMPORT_LINES).forEach((item) => {
-    mergeHomeIngredient(nextState.homeIngredients, item);
-  });
+  if (!nextState.appliedImports.includes(PANTRY_PHOTO_IMPORT_ID)) {
+    parseIngredientLines(PANTRY_PHOTO_IMPORT_LINES).forEach((item) => {
+      if (mergeHomeIngredient(nextState.homeIngredients, item)) {
+        changed = true;
+      }
+    });
+    nextState.appliedImports = [...nextState.appliedImports, PANTRY_PHOTO_IMPORT_ID];
+    changed = true;
+  }
 
-  nextState.appliedImports = [...appliedImports, PANTRY_PHOTO_IMPORT_ID];
-  return { state: nextState, changed: true };
+  if (!nextState.appliedImports.includes(FAMILY_FAVORITES_IMPORT_ID)) {
+    FAMILY_FAVORITE_RECIPES.forEach((recipe) => {
+      if (mergeRecipe(nextState.recipes, recipe)) {
+        changed = true;
+      }
+    });
+    FAMILY_FAVORITE_FOODS.forEach((favorite) => {
+      if (mergeChloeFavorite(nextState.chloeFavorites, favorite)) {
+        changed = true;
+      }
+    });
+    nextState.appliedImports = [...nextState.appliedImports, FAMILY_FAVORITES_IMPORT_ID];
+    changed = true;
+  }
+
+  if (changed) {
+    nextState.updatedAt = Date.now();
+  }
+
+  return { state: nextState, changed };
 }
 
 function getInitialActiveTab(fallback) {
@@ -1763,6 +1920,38 @@ function addHomeIngredient(item) {
   mergeHomeIngredient(state.homeIngredients, item);
 }
 
+function mergeRecipe(recipes, recipe) {
+  const existing = recipes.find((item) => {
+    return item.id === recipe.id || ingredientNamesMatch(item.name, recipe.name);
+  });
+  if (existing) {
+    return false;
+  }
+
+  recipes.push(recipe);
+  return true;
+}
+
+function mergeChloeFavorite(favorites, item) {
+  const cleanName = item.name.trim();
+  if (!cleanName) {
+    return false;
+  }
+
+  const existing = favorites.find((favorite) => ingredientNamesMatch(favorite.name, cleanName));
+  if (existing) {
+    existing.note = item.note || existing.note;
+    return false;
+  }
+
+  favorites.push({
+    id: createId(),
+    name: cleanName,
+    note: item.note || "",
+  });
+  return true;
+}
+
 function mergeHomeIngredient(homeIngredients, item) {
   const cleanName = item.name.trim();
   if (!cleanName) {
@@ -1792,25 +1981,7 @@ function mergeHomeIngredient(homeIngredients, item) {
 }
 
 function addChloeFavorite(item) {
-  const cleanName = item.name.trim();
-  if (!cleanName) {
-    return;
-  }
-
-  const existing = state.chloeFavorites.find((favorite) =>
-    ingredientNamesMatch(favorite.name, cleanName),
-  );
-
-  if (existing) {
-    existing.note = item.note || existing.note;
-    return;
-  }
-
-  state.chloeFavorites.push({
-    id: createId(),
-    name: cleanName,
-    note: item.note || "",
-  });
+  mergeChloeFavorite(state.chloeFavorites, item);
 }
 
 function fillMealForm(meal) {
