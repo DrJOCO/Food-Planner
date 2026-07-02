@@ -319,3 +319,25 @@ test("remote sync applies shared fields while keeping local view state", async (
   assert.equal(merged.homeIngredients[0].name, "carrots");
   assert.equal(merged.groceryChecked["manual|manual"], true);
 });
+
+test("built-in Chloe foods import seeds recipes and favorites without duplicates", async () => {
+  const app = await createHarness();
+  const state = app.run("state");
+
+  assert.ok(state.appliedImports.includes("chloe-foods-2026-07-01"));
+
+  const recipeNames = plain(state.recipes.map((recipe) => recipe.name));
+  ["Protein pasta", "Turkey sandwich", "Rice cooker beef, corn, and rice"].forEach((name) => {
+    assert.ok(recipeNames.includes(name), `missing recipe: ${name}`);
+  });
+
+  const favoriteNames = plain(
+    state.chloeFavorites.map((favorite) => favorite.name.toLowerCase()),
+  );
+  ["blackberries", "papaya", "apple", "cherries", "zucchini", "cucumber"].forEach((name) => {
+    assert.ok(favoriteNames.includes(name), `missing favorite: ${name}`);
+  });
+
+  const strawberryEntries = favoriteNames.filter((name) => name === "strawberries");
+  assert.equal(strawberryEntries.length, 1);
+});
