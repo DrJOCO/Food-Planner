@@ -1,0 +1,27 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // The app stores everything in one document per household:
+    //   /households/{householdId}/foodPlanner/state
+    // The household code is the shared secret: you can read or write a
+    // household's plan only if you already know its code. Listing the
+    // households collection is denied, so codes cannot be enumerated.
+    match /households/{householdId}/foodPlanner/state {
+      allow get: if true;
+      allow create, update: if isFoodPlannerDoc();
+      allow delete: if false;
+    }
+
+    function isFoodPlannerDoc() {
+      return request.resource.data.app == "family-food-planner"
+        && request.resource.data.state is map
+        && request.resource.data.updatedAt is number;
+    }
+
+    // Everything else, including listing /households, is denied.
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
