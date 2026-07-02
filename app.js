@@ -800,6 +800,7 @@ function bindEvents() {
   });
 
   els.weekGrid.addEventListener("click", handleWeekClick);
+  els.quickPickList.addEventListener("click", handleWeekClick);
   els.recipeForm.addEventListener("submit", handleRecipeSubmit);
   els.recipeImportForm.addEventListener("submit", handleRecipeImportSubmit);
   els.cancelRecipeEdit.addEventListener("click", () => {

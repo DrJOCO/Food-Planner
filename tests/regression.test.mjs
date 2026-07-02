@@ -42,7 +42,11 @@ class ElementStub {
     this.className = [...this.classNames].join(" ");
   }
 
-  addEventListener() {}
+  addEventListener(type, handler) {
+    this.listeners = this.listeners || {};
+    this.listeners[type] = this.listeners[type] || [];
+    this.listeners[type].push(handler);
+  }
 
   focus() {
     this.focused = true;
@@ -340,4 +344,24 @@ test("built-in Chloe foods import seeds recipes and favorites without duplicates
 
   const strawberryEntries = favoriteNames.filter((name) => name === "strawberries");
   assert.equal(strawberryEntries.length, 1);
+});
+
+test("quick idea buttons add the recipe to an open dinner slot", async () => {
+  const app = await createHarness();
+
+  const quickPickList = app.run('document.querySelector("#quickPickList")');
+  const clickHandler = quickPickList.listeners?.click?.[0];
+  assert.ok(clickHandler, "quick pick list has a click handler bound");
+
+  const recipeId = app.run("state.recipes[0].id");
+  const before = app.run("state.planItems.length");
+
+  const button = { dataset: { action: "quick-add", id: recipeId } };
+  clickHandler({ target: { closest: () => button } });
+
+  assert.equal(app.run("state.planItems.length"), before + 1);
+  const added = plain(app.run("state.planItems[state.planItems.length - 1]"));
+  assert.equal(added.recipeId, recipeId);
+  assert.equal(added.slot, "Dinner");
+  assert.equal(app.run("state.activeTab"), "planner");
 });
