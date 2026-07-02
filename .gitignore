@@ -1,0 +1,5 @@
+# macOS local metadata.
+.DS_Store
+
+# Local design export kept as reference material; production source lives at repo root.
+design_handoff_food_planner/

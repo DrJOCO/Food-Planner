@@ -1,7 +1,7 @@
 const STORAGE_KEY = "familyFoodPlanner.v1";
 const SYNC_SETTINGS_KEY = "familyFoodPlanner.sync.v1";
 const DEVICE_ID_KEY = "familyFoodPlanner.deviceId.v1";
-const APP_CACHE_VERSION = "9";
+const APP_CACHE_VERSION = "10";
 const SYNC_SAVE_DEBOUNCE_MS = 900;
 const FIREBASE_APP_URL = "https://www.gstatic.com/firebasejs/10.12.5/firebase-app.js";
 const FIREBASE_FIRESTORE_URL = "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
@@ -28,6 +28,7 @@ const CATEGORY_ORDER = [
 
 const PANTRY_PHOTO_IMPORT_ID = "pantry-photos-2026-06-24";
 const FAMILY_FAVORITES_IMPORT_ID = "family-favorites-2026-06-25";
+const CHLOE_FOODS_IMPORT_ID = "chloe-foods-2026-07-01";
 const PANTRY_PHOTO_IMPORT_LINES = `
 Barilla rotini | Pantry
 tri-color rotini | Pantry
@@ -190,6 +191,76 @@ const FAMILY_FAVORITE_FOODS = [
   { name: "strawberries", note: "Snack staple." },
   { name: "blueberries", note: "Snack staple." },
   { name: "Babybel cheese", note: "Snack staple." },
+];
+
+const CHLOE_FOODS_RECIPES = [
+  {
+    id: "recipe-protein-pasta",
+    name: "Protein pasta",
+    time: "15 min",
+    servings: 2,
+    tags: ["quick", "kid-friendly"],
+    chloeNote: "Keep it plain or lightly buttered.",
+    ingredients: [
+      ingredient("1", "box", "protein pasta", "Pantry"),
+      ingredient("1", "tbsp", "butter", "Dairy"),
+      ingredient("1/4", "cup", "shredded cheese", "Dairy"),
+    ],
+    steps: [
+      "Boil protein pasta until soft.",
+      "Drain and toss with butter.",
+      "Top with a little cheese.",
+    ],
+  },
+  {
+    id: "recipe-turkey-sandwich",
+    name: "Turkey sandwich",
+    time: "5 min",
+    servings: 1,
+    tags: ["quick", "kid-friendly"],
+    chloeNote: "Cut into small pieces.",
+    ingredients: [
+      ingredient("2", "slices", "sandwich bread", "Bakery"),
+      ingredient("3", "slices", "sliced turkey", "Meat"),
+      ingredient("1", "slice", "cheese", "Dairy"),
+    ],
+    steps: [
+      "Layer turkey and cheese on bread.",
+      "Cut into small pieces.",
+    ],
+  },
+  {
+    id: "recipe-rice-cooker-beef-corn-rice",
+    name: "Rice cooker beef, corn, and rice",
+    time: "40 min",
+    servings: 3,
+    tags: ["kid-friendly", "leftovers"],
+    chloeNote: "Mix well so the beef is in small pieces.",
+    ingredients: [
+      ingredient("1", "lb", "ground beef", "Meat"),
+      ingredient("1.5", "cups", "rice", "Pantry"),
+      ingredient("1", "cup", "corn", "Frozen"),
+      ingredient("1", "bottle", "soy sauce", "Pantry"),
+    ],
+    steps: [
+      "Brown the ground beef.",
+      "Add rice, water, corn, and beef to the rice cooker.",
+      "Season lightly with soy sauce.",
+      "Cook on the normal rice setting.",
+    ],
+  },
+];
+
+const CHLOE_FOODS_FAVORITES = [
+  { name: "blackberries", note: "Snack staple." },
+  { name: "papaya", note: "Snack staple." },
+  { name: "apple", note: "Snack staple." },
+  { name: "cherries", note: "Snack staple." },
+  { name: "zucchini", note: "Eats it with lunch or dinner." },
+  { name: "cucumber", note: "Eats it with lunch or dinner." },
+  { name: "protein pasta", note: "Lunch or dinner favorite." },
+  { name: "turkey sandwich", note: "Lunch favorite." },
+  { name: "rice cooker beef, corn, and rice", note: "Dinner favorite." },
 ];
 
 const SLOT_ORDER = {
@@ -598,6 +669,21 @@ function applyBuiltInImports(nextState) {
     changed = true;
   }
 
+  if (!nextState.appliedImports.includes(CHLOE_FOODS_IMPORT_ID)) {
+    CHLOE_FOODS_RECIPES.forEach((recipe) => {
+      if (mergeRecipe(nextState.recipes, recipe)) {
+        changed = true;
+      }
+    });
+    CHLOE_FOODS_FAVORITES.forEach((favorite) => {
+      if (mergeChloeFavorite(nextState.chloeFavorites, favorite)) {
+        changed = true;
+      }
+    });
+    nextState.appliedImports = [...nextState.appliedImports, CHLOE_FOODS_IMPORT_ID];
+    changed = true;
+  }
+
   if (changed) {
     nextState.updatedAt = Date.now();
   }
@@ -714,6 +800,7 @@ function bindEvents() {
   });
 
   els.weekGrid.addEventListener("click", handleWeekClick);
+  els.quickPickList.addEventListener("click", handleWeekClick);
   els.recipeForm.addEventListener("submit", handleRecipeSubmit);
   els.recipeImportForm.addEventListener("submit", handleRecipeImportSubmit);
   els.cancelRecipeEdit.addEventListener("click", () => {
