@@ -1,12 +1,14 @@
-const CACHE_NAME = "family-food-planner-v9";
+const CACHE_NAME = "family-food-planner-v10";
 const APP_SHELL = [
   "./",
   "./index.html",
-  "./styles.css?v=9",
-  "./app.js?v=9",
-  "./firebase-config.js?v=9",
-  "./manifest.webmanifest?v=9",
+  "./styles.css?v=10",
+  "./app.js?v=10",
+  "./firebase-config.js?v=10",
+  "./manifest.webmanifest?v=10",
   "./assets/app-icon.svg",
+  "./assets/app-icon-192.png",
+  "./assets/app-icon-512.png",
   "./assets/kitchen-planning-banner.png",
 ];
 
