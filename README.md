@@ -54,7 +54,13 @@ window.FOOD_PLANNER_FIREBASE_CONFIG = {
 
 Use the same household code on each phone. Shared sync copies recipes, meal plans, pantry items, Chloe favorites, manual grocery items, and grocery checkmarks. The current tab and week view stay local to each phone.
 
-Make sure Firestore security rules restrict household documents before sharing the app outside the family.
+Firestore security rules live in `firestore.rules`: reads and app-shaped writes require knowing the household code, household codes cannot be listed or enumerated, and every other path is denied. Deploy rule changes with:
+
+```sh
+npx firebase-tools deploy --only firestore:rules --project chloecookbook
+```
+
+Because the household code is the only secret, pick one that is long and not guessable.
 
 ## Design handoff
 
