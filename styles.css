@@ -340,6 +340,7 @@ p {
 .planner-main,
 .recipes-main,
 .home-main,
+.home-main > section,
 .recommendation-section {
   display: grid;
   gap: 18px;
