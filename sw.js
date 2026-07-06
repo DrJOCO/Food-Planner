@@ -1,16 +1,21 @@
-const CACHE_NAME = "family-food-planner-v10";
+const CACHE_NAME = "family-food-planner-v11";
+const FONTS_CACHE_NAME = "family-food-planner-fonts-v1";
 const APP_SHELL = [
   "./",
   "./index.html",
-  "./styles.css?v=10",
-  "./app.js?v=10",
-  "./firebase-config.js?v=10",
-  "./manifest.webmanifest?v=10",
+  "./styles.css?v=11",
+  "./app.js?v=11",
+  "./firebase-config.js?v=11",
+  "./manifest.webmanifest?v=11",
   "./assets/app-icon.svg",
   "./assets/app-icon-192.png",
   "./assets/app-icon-512.png",
   "./assets/kitchen-planning-banner.png",
 ];
+const FONT_ORIGINS = ["https://fonts.googleapis.com", "https://fonts.gstatic.com"];
+// Caches this service worker owns; anything else found on activate is a stale
+// version and gets deleted.
+const OWNED_CACHE_NAMES = [CACHE_NAME, FONTS_CACHE_NAME];
 
 self.addEventListener("install", (event) => {
   event.waitUntil(
@@ -25,10 +30,33 @@ self.addEventListener("activate", (event) => {
   event.waitUntil(
     caches
       .keys()
-      .then((keys) => Promise.all(keys.filter((key) => key !== CACHE_NAME).map((key) => caches.delete(key))))
+      .then((keys) =>
+        Promise.all(keys.filter((key) => !OWNED_CACHE_NAMES.includes(key)).map((key) => caches.delete(key))),
+      )
       .then(() => self.clients.claim()),
   );
 });
+
+// Stale-while-revalidate: serve the cached font response immediately if we
+// have one, and refresh the cache in the background so the next offline load
+// gets whatever is newest. Falls through to the network (or a cache miss) on
+// the very first request.
+function handleFontRequest(request) {
+  return caches.open(FONTS_CACHE_NAME).then((cache) =>
+    cache.match(request).then((cachedResponse) => {
+      const networkFetch = fetch(request)
+        .then((response) => {
+          if (response && response.status === 200) {
+            cache.put(request, response.clone());
+          }
+          return response;
+        })
+        .catch(() => cachedResponse);
+
+      return cachedResponse || networkFetch;
+    }),
+  );
+}
 
 self.addEventListener("fetch", (event) => {
   if (event.request.method !== "GET") {
@@ -36,6 +64,12 @@ self.addEventListener("fetch", (event) => {
   }
 
   const requestUrl = new URL(event.request.url);
+
+  if (FONT_ORIGINS.includes(requestUrl.origin)) {
+    event.respondWith(handleFontRequest(event.request));
+    return;
+  }
+
   if (requestUrl.origin !== self.location.origin) {
     return;
   }
@@ -102,7 +136,13 @@ self.addEventListener("fetch", (event) => {
           });
           return response;
         })
-        .catch(() => caches.match("./index.html"));
+        .catch(() =>
+          // Only navigations should ever fall back to index.html. This request
+          // was for a specific asset (CSS/JS/image/etc) with no cache entry, so
+          // there is nothing useful to serve; fail the request instead of
+          // returning HTML where the caller expects its real asset.
+          Response.error(),
+        );
     }),
   );
 });
