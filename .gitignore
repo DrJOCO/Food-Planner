@@ -1,5 +1,9 @@
 # macOS local metadata.
 .DS_Store
+* 2.*
+
+# Local Claude Code session config.
+.claude/
 
 # Local design export kept as reference material; production source lives at repo root.
 design_handoff_food_planner/
