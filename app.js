@@ -1,7 +1,7 @@
 const STORAGE_KEY = "familyFoodPlanner.v1";
 const SYNC_SETTINGS_KEY = "familyFoodPlanner.sync.v1";
 const DEVICE_ID_KEY = "familyFoodPlanner.deviceId.v1";
-const APP_CACHE_VERSION = "10";
+const APP_CACHE_VERSION = "11";
 const SYNC_SAVE_DEBOUNCE_MS = 900;
 const FIREBASE_APP_URL = "https://www.gstatic.com/firebasejs/10.12.5/firebase-app.js";
 const FIREBASE_FIRESTORE_URL = "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
@@ -12,8 +12,22 @@ const SYNCED_STATE_FIELDS = [
   "homeIngredients",
   "manualGroceries",
   "groceryChecked",
+  "groceryCheckedAt",
   "appliedImports",
+  "deletedItems",
 ];
+
+// Collections merged per item by `id`, comparing each item's own `updatedAt`.
+const MERGED_ITEM_COLLECTIONS = [
+  "recipes",
+  "planItems",
+  "chloeFavorites",
+  "homeIngredients",
+  "manualGroceries",
+];
+
+// Tombstones older than this are pruned on save.
+const TOMBSTONE_MAX_AGE_MS = 60 * 24 * 60 * 60 * 1000;
 
 const CATEGORY_ORDER = [
   "Produce",
@@ -522,6 +536,9 @@ const els = {
   syncBadge: document.querySelector("#syncBadge"),
   syncNow: document.querySelector("#syncNow"),
   disconnectSync: document.querySelector("#disconnectSync"),
+  exportBackup: document.querySelector("#exportBackup"),
+  importBackup: document.querySelector("#importBackup"),
+  importBackupFile: document.querySelector("#importBackupFile"),
   manualGroceryForm: document.querySelector("#manualGroceryForm"),
   manualGroceryName: document.querySelector("#manualGroceryName"),
   manualGroceryAmount: document.querySelector("#manualGroceryAmount"),
@@ -559,6 +576,154 @@ function createId() {
   return `id-${Date.now()}-${Math.random().toString(16).slice(2)}`;
 }
 
+function nowMs() {
+  return Date.now();
+}
+
+// Stamp an item's per-item `updatedAt` (ms epoch) so merge sync can compare it
+// against the same id coming from another device. Items missing an `updatedAt`
+// are treated as timestamp 0 during merges.
+function touchItem(item, timestamp) {
+  if (item && typeof item === "object") {
+    item.updatedAt = timestamp || nowMs();
+  }
+  return item;
+}
+
+function itemUpdatedAt(item) {
+  return Number(item?.updatedAt) || 0;
+}
+
+// Record a deletion so it propagates to other devices instead of being
+// resurrected by the per-item merge. The tombstone timestamp is the delete
+// moment; an item later edited with a newer `updatedAt` wins over the delete.
+function tombstoneItem(id, timestamp) {
+  if (!id) {
+    return;
+  }
+  if (!state.deletedItems || typeof state.deletedItems !== "object") {
+    state.deletedItems = {};
+  }
+  const at = timestamp || nowMs();
+  const existing = Number(state.deletedItems[id]) || 0;
+  state.deletedItems[id] = Math.max(existing, at);
+}
+
+// Merge two arrays of {id, updatedAt} items. Same id on both sides: newer
+// updatedAt wins. Id on one side only: keep it, unless a tombstone newer than
+// the item's updatedAt marks it deleted.
+function mergeItemArrays(localItems, remoteItems, deletedItems) {
+  const tombstones = deletedItems && typeof deletedItems === "object" ? deletedItems : {};
+  const merged = new Map();
+
+  const consider = (item) => {
+    if (!item || typeof item !== "object" || !item.id) {
+      return;
+    }
+    const existing = merged.get(item.id);
+    if (!existing || itemUpdatedAt(item) >= itemUpdatedAt(existing)) {
+      merged.set(item.id, item);
+    }
+  };
+
+  (Array.isArray(localItems) ? localItems : []).forEach(consider);
+  (Array.isArray(remoteItems) ? remoteItems : []).forEach(consider);
+
+  const result = [];
+  merged.forEach((item, id) => {
+    const tombstonedAt = Number(tombstones[id]) || 0;
+    // Edit wins over a stale delete; a delete newer than the item removes it.
+    if (tombstonedAt > itemUpdatedAt(item)) {
+      return;
+    }
+    result.push(item);
+  });
+  return result;
+}
+
+// Merge two tombstone maps by per-id max timestamp.
+function mergeTombstones(localDeleted, remoteDeleted) {
+  const merged = {};
+  const absorb = (map) => {
+    if (!map || typeof map !== "object") {
+      return;
+    }
+    Object.keys(map).forEach((id) => {
+      const at = Number(map[id]) || 0;
+      if (at > (merged[id] || 0)) {
+        merged[id] = at;
+      }
+    });
+  };
+  absorb(localDeleted);
+  absorb(remoteDeleted);
+  return merged;
+}
+
+// Merge grocery check state. Each key has a parallel `checkedAt` timestamp; the
+// newer write per key wins. This keeps a just-unchecked item from being
+// resurrected by an older remote check (and vice versa). Keys present on only
+// one side are carried over with their own timestamp.
+function mergeGroceryChecked(localChecked, localCheckedAt, remoteChecked, remoteCheckedAt) {
+  const local = localChecked && typeof localChecked === "object" ? localChecked : {};
+  const remote = remoteChecked && typeof remoteChecked === "object" ? remoteChecked : {};
+  const localAt = localCheckedAt && typeof localCheckedAt === "object" ? localCheckedAt : {};
+  const remoteAt = remoteCheckedAt && typeof remoteCheckedAt === "object" ? remoteCheckedAt : {};
+
+  const checked = {};
+  const checkedAt = {};
+  const keys = new Set([...Object.keys(local), ...Object.keys(remote)]);
+
+  keys.forEach((key) => {
+    const lAt = Number(localAt[key]) || 0;
+    const rAt = Number(remoteAt[key]) || 0;
+    let value;
+    if (rAt > lAt) {
+      value = Boolean(remote[key]);
+    } else if (lAt > rAt) {
+      value = Boolean(local[key]);
+    } else {
+      // Tie (including legacy data with no timestamps): union the checks so a
+      // check that predates timestamps is never silently dropped.
+      value = Boolean(local[key] || remote[key]);
+    }
+    const at = Math.max(lAt, rAt);
+    if (value) {
+      checked[key] = true;
+    }
+    if (at) {
+      checkedAt[key] = at;
+    }
+  });
+
+  return { checked, checkedAt };
+}
+
+// Merge appliedImports by union.
+function mergeAppliedImports(localImports, remoteImports) {
+  const merged = new Set();
+  (Array.isArray(localImports) ? localImports : []).forEach((id) => merged.add(id));
+  (Array.isArray(remoteImports) ? remoteImports : []).forEach((id) => merged.add(id));
+  return [...merged];
+}
+
+// Drop tombstones older than TOMBSTONE_MAX_AGE_MS so the map does not grow
+// forever. Called on save.
+function pruneTombstones(deletedItems) {
+  if (!deletedItems || typeof deletedItems !== "object") {
+    return {};
+  }
+  const cutoff = nowMs() - TOMBSTONE_MAX_AGE_MS;
+  const pruned = {};
+  Object.keys(deletedItems).forEach((id) => {
+    const at = Number(deletedItems[id]) || 0;
+    if (at >= cutoff) {
+      pruned[id] = at;
+    }
+  });
+  return pruned;
+}
+
 function loadState() {
   const todayWeekStart = toIso(startOfWeek(new Date()));
   try {
@@ -582,7 +747,9 @@ function loadState() {
       homeIngredients: parsed.homeIngredients || [],
       manualGroceries: parsed.manualGroceries || [],
       groceryChecked: parsed.groceryChecked || {},
+      groceryCheckedAt: parsed.groceryCheckedAt || {},
       appliedImports: parsed.appliedImports || [],
+      deletedItems: parsed.deletedItems || {},
       selectedDate: parsed.selectedDate || toIso(new Date()),
       activeTab: getInitialActiveTab(parsed.activeTab || "planner"),
       updatedAt: parsed.updatedAt || Date.now(),
@@ -608,7 +775,9 @@ function defaultState(weekStart) {
     homeIngredients: [],
     manualGroceries: [],
     groceryChecked: {},
+    groceryCheckedAt: {},
     appliedImports: [],
+    deletedItems: {},
     selectedDate: toIso(new Date()),
     updatedAt: Date.now(),
   };
@@ -635,6 +804,10 @@ function applyBuiltInImports(nextState) {
   const appliedImports = Array.isArray(nextState.appliedImports) ? nextState.appliedImports : [];
   let changed = false;
   nextState.appliedImports = appliedImports;
+  const deletedItems =
+    nextState.deletedItems && typeof nextState.deletedItems === "object"
+      ? nextState.deletedItems
+      : {};
 
   nextState.homeIngredients = Array.isArray(nextState.homeIngredients)
     ? nextState.homeIngredients
@@ -656,7 +829,7 @@ function applyBuiltInImports(nextState) {
 
   if (!nextState.appliedImports.includes(FAMILY_FAVORITES_IMPORT_ID)) {
     FAMILY_FAVORITE_RECIPES.forEach((recipe) => {
-      if (mergeRecipe(nextState.recipes, recipe)) {
+      if (mergeRecipe(nextState.recipes, recipe, deletedItems)) {
         changed = true;
       }
     });
@@ -671,7 +844,7 @@ function applyBuiltInImports(nextState) {
 
   if (!nextState.appliedImports.includes(CHLOE_FOODS_IMPORT_ID)) {
     CHLOE_FOODS_RECIPES.forEach((recipe) => {
-      if (mergeRecipe(nextState.recipes, recipe)) {
+      if (mergeRecipe(nextState.recipes, recipe, deletedItems)) {
         changed = true;
       }
     });
@@ -702,6 +875,7 @@ function getInitialActiveTab(fallback) {
 
 function seedPlanItems(weekStart) {
   const monday = fromIso(weekStart);
+  const seededAt = nowMs();
   return [
     {
       id: createId(),
@@ -713,6 +887,7 @@ function seedPlanItems(weekStart) {
       chloeNote: "Sauce on side.",
       extraGroceries: [],
       done: false,
+      updatedAt: seededAt,
     },
     {
       id: createId(),
@@ -724,6 +899,7 @@ function seedPlanItems(weekStart) {
       chloeNote: "Pull Chloe portion before soy sauce.",
       extraGroceries: [ingredient("1", "pint", "berries", "Produce")],
       done: false,
+      updatedAt: seededAt,
     },
     {
       id: createId(),
@@ -735,12 +911,14 @@ function seedPlanItems(weekStart) {
       chloeNote: "Keep toppings separate.",
       extraGroceries: [],
       done: false,
+      updatedAt: seededAt,
     },
   ];
 }
 
 function saveState() {
   state.updatedAt = Date.now();
+  state.deletedItems = pruneTombstones(state.deletedItems);
   persistState(state);
   queueSyncPush();
 }
@@ -815,6 +993,11 @@ function bindEvents() {
   els.syncForm.addEventListener("submit", handleSyncSubmit);
   els.syncNow.addEventListener("click", handleSyncNow);
   els.disconnectSync.addEventListener("click", handleSyncDisconnect);
+  els.exportBackup.addEventListener("click", handleExportBackup);
+  els.importBackup.addEventListener("click", () => {
+    els.importBackupFile.click();
+  });
+  els.importBackupFile.addEventListener("change", handleImportBackupFile);
   els.chloeFavoriteList.addEventListener("click", handleChloeFavoriteClick);
   els.homeIngredientList.addEventListener("click", handleHomeIngredientClick);
   els.homeRecommendations.addEventListener("click", handleRecommendationClick);
@@ -822,6 +1005,14 @@ function bindEvents() {
   els.groceryList.addEventListener("change", handleGroceryChange);
   els.groceryList.addEventListener("click", handleGroceryClick);
   els.clearCheckedGroceries.addEventListener("click", () => {
+    const clearedAt = nowMs();
+    if (!state.groceryCheckedAt || typeof state.groceryCheckedAt !== "object") {
+      state.groceryCheckedAt = {};
+    }
+    // Stamp every cleared key so the un-check wins over an older remote check.
+    Object.keys(state.groceryChecked).forEach((key) => {
+      state.groceryCheckedAt[key] = clearedAt;
+    });
     state.groceryChecked = {};
     saveAndRender();
   });
@@ -884,7 +1075,7 @@ function renderMealFormOptions(weekDates) {
   els.mealDay.innerHTML = weekDates
     .map((date) => {
       const iso = toIso(date);
-      return `<option value="${iso}">${escapeHtml(formatDayOption(date))}</option>`;
+      return `<option value="${escapeAttribute(iso)}">${escapeHtml(formatDayOption(date))}</option>`;
     })
     .join("");
 
@@ -899,7 +1090,7 @@ function renderRecipeOptions() {
     ...state.recipes
       .slice()
       .sort((a, b) => a.name.localeCompare(b.name))
-      .map((recipe) => `<option value="${recipe.id}">${escapeHtml(recipe.name)}</option>`),
+      .map((recipe) => `<option value="${escapeAttribute(recipe.id)}">${escapeHtml(recipe.name)}</option>`),
   ];
 
   els.mealRecipe.innerHTML = options.join("");
@@ -925,11 +1116,17 @@ function renderSummary() {
 
 function renderQuickPicks() {
   const plannedRecipeIds = new Set(getCurrentWeekMeals().map((meal) => meal.recipeId));
-  const recipes = state.recipes
+  // Decorate each recipe with its analysis and score once, so sorting does not
+  // re-run analyzeRecipe (pantry fuzzy matching) per comparison.
+  const decorated = state.recipes
     .filter((recipe) => !plannedRecipeIds.has(recipe.id))
-    .sort((a, b) => scoreRecipeForHome(b) - scoreRecipeForHome(a));
+    .map((recipe) => {
+      const analysis = analyzeRecipe(recipe);
+      return { recipe, analysis, score: scoreRecipeForHome(recipe, analysis) };
+    })
+    .sort((a, b) => b.score - a.score);
 
-  const rotated = rotateArray(recipes, quickOffset).slice(0, 4);
+  const rotated = rotateArray(decorated, quickOffset).slice(0, 4);
 
   if (!rotated.length) {
     els.quickPickList.innerHTML = `<div class="empty-state"><strong>Week is full</strong><span>Favorites are already planned.</span></div>`;
@@ -938,8 +1135,7 @@ function renderQuickPicks() {
 
   els.quickPickList.innerHTML = rotated
     .map(
-      (recipe) => {
-        const analysis = analyzeRecipe(recipe);
+      ({ recipe, analysis }) => {
         const homeText = state.homeIngredients.length
           ? ` · Have ${analysis.have.length}/${analysis.total}`
           : "";
@@ -952,7 +1148,7 @@ function renderQuickPicks() {
               <strong>${escapeHtml(recipe.name)}</strong>
               <span>${escapeHtml(recipe.time || "Anytime")} · ${escapeHtml(recipe.tags.slice(0, 2).join(", ") || "recipe")}${escapeHtml(homeText)}${escapeHtml(chloeText)}</span>
             </div>
-            <button class="add-button" type="button" data-action="quick-add" data-id="${recipe.id}" aria-label="Add ${escapeAttribute(recipe.name)}">+</button>
+            <button class="add-button" type="button" data-action="quick-add" data-id="${escapeAttribute(recipe.id)}" aria-label="Add ${escapeAttribute(recipe.name)}">+</button>
           </article>
         `;
       },
@@ -976,7 +1172,7 @@ function renderWeekGrid(weekDates) {
       const selected = iso === selectedIso;
 
       return `
-        <button class="day-pill ${selected ? "selected" : ""}" type="button" data-action="select-day" data-date="${iso}">
+        <button class="day-pill ${selected ? "selected" : ""}" type="button" data-action="select-day" data-date="${escapeAttribute(iso)}">
           <span>${escapeHtml(formatDate(date, { weekday: "short" }).slice(0, 1))}</span>
           <strong>${escapeHtml(formatDate(date, { day: "numeric" }))}</strong>
           ${hasMeals ? `<em>${dayMealCount}</em>` : ""}
@@ -987,7 +1183,7 @@ function renderWeekGrid(weekDates) {
 
   const mealCards = selectedMeals.length
     ? selectedMeals.map(renderMealCard).join("")
-    : `<div class="empty-state"><strong>No meal yet</strong><span>Ready for a plan.</span><button class="add-day-button" type="button" data-action="set-day" data-date="${selectedIso}">Add dinner</button></div>`;
+    : `<div class="empty-state"><strong>No meal yet</strong><span>Ready for a plan.</span><button class="add-day-button" type="button" data-action="set-day" data-date="${escapeAttribute(selectedIso)}">Add dinner</button></div>`;
 
   els.weekGrid.innerHTML = `
     <div class="day-pill-row">${dayPills}</div>
@@ -1021,9 +1217,9 @@ function renderMealCard(meal) {
       ${chloeNote}
       ${groceryNote}
       <div class="meal-actions">
-        <button class="small-button" type="button" data-action="toggle-done" data-id="${meal.id}">${meal.done ? "Undo" : "Done"}</button>
-        <button class="small-button" type="button" data-action="edit-meal" data-id="${meal.id}">Edit</button>
-        <button class="small-button" type="button" data-action="remove-meal" data-id="${meal.id}">Remove</button>
+        <button class="small-button" type="button" data-action="toggle-done" data-id="${escapeAttribute(meal.id)}">${meal.done ? "Undo" : "Done"}</button>
+        <button class="small-button" type="button" data-action="edit-meal" data-id="${escapeAttribute(meal.id)}">Edit</button>
+        <button class="small-button" type="button" data-action="remove-meal" data-id="${escapeAttribute(meal.id)}">Remove</button>
       </div>
     </article>
   `;
@@ -1032,6 +1228,7 @@ function renderMealCard(meal) {
 function renderRecipes() {
   const query = els.recipeSearch.value.trim().toLowerCase();
   const filter = els.recipeFilter.value;
+  const useHomeScore = Boolean(state.homeIngredients.length || state.chloeFavorites.length);
   const recipes = state.recipes
     .filter((recipe) => {
       const searchText = [
@@ -1047,11 +1244,18 @@ function renderRecipes() {
       const matchesFilter = filter === "all" || recipe.tags.includes(filter);
       return matchesQuery && matchesFilter;
     })
+    // Decorate each recipe with its analysis (and score, when needed for
+    // sorting) once, so sorting and rendering do not re-run analyzeRecipe
+    // (pantry fuzzy matching) per comparison.
+    .map((recipe) => {
+      const analysis = analyzeRecipe(recipe);
+      return { recipe, analysis, score: useHomeScore ? scoreRecipeForHome(recipe, analysis) : 0 };
+    })
     .sort((a, b) => {
-      if (state.homeIngredients.length || state.chloeFavorites.length) {
-        return scoreRecipeForHome(b) - scoreRecipeForHome(a);
+      if (useHomeScore) {
+        return b.score - a.score;
       }
-      return a.name.localeCompare(b.name);
+      return a.recipe.name.localeCompare(b.recipe.name);
     });
 
   if (!recipes.length) {
@@ -1060,8 +1264,7 @@ function renderRecipes() {
   }
 
   els.recipeList.innerHTML = recipes
-    .map((recipe) => {
-      const analysis = analyzeRecipe(recipe);
+    .map(({ recipe, analysis }) => {
       const tags = recipe.tags
         .map((tag) => `<span class="pill tag">${escapeHtml(tag)}</span>`)
         .join("");
@@ -1091,9 +1294,9 @@ function renderRecipes() {
           ${homeNote}
           ${chloeFavoriteNote}
           <div class="recipe-actions">
-            <button class="small-button" type="button" data-action="plan-recipe" data-id="${recipe.id}">Plan this week</button>
-            <button class="small-button" type="button" data-action="edit-recipe" data-id="${recipe.id}">Edit</button>
-            <button class="small-button" type="button" data-action="delete-recipe" data-id="${recipe.id}">Delete</button>
+            <button class="small-button" type="button" data-action="plan-recipe" data-id="${escapeAttribute(recipe.id)}">Plan this week</button>
+            <button class="small-button" type="button" data-action="edit-recipe" data-id="${escapeAttribute(recipe.id)}">Edit</button>
+            <button class="small-button" type="button" data-action="delete-recipe" data-id="${escapeAttribute(recipe.id)}">Delete</button>
           </div>
         </article>
       `;
@@ -1122,7 +1325,7 @@ function renderGroceries() {
         const checked = Boolean(state.groceryChecked[item.key]);
         const source = item.sources.length ? item.sources.join(", ") : "Manual";
         const removeButton = item.manualId
-          ? `<button class="small-button" type="button" data-action="remove-grocery" data-id="${item.manualId}">Remove</button>`
+          ? `<button class="small-button" type="button" data-action="remove-grocery" data-id="${escapeAttribute(item.manualId)}">Remove</button>`
           : "";
 
         return `
@@ -1252,7 +1455,7 @@ function renderHomeRecommendations() {
           ${favoriteMatches}
           <div class="missing-list">${missing}</div>
           <div class="recipe-actions">
-            <button class="small-button" type="button" data-action="plan-recipe" data-id="${recipe.id}">Plan this week</button>
+            <button class="small-button" type="button" data-action="plan-recipe" data-id="${escapeAttribute(recipe.id)}">Plan this week</button>
           </div>
         </article>
       `;
@@ -1279,7 +1482,7 @@ function renderChloeFavoriteList() {
             <strong>${escapeHtml(favorite.name)}</strong>
             ${note}
           </span>
-          <button class="small-button" type="button" data-action="remove-favorite" data-id="${favorite.id}">Remove</button>
+          <button class="small-button" type="button" data-action="remove-favorite" data-id="${escapeAttribute(favorite.id)}">Remove</button>
         </article>
       `;
     })
@@ -1307,8 +1510,8 @@ function renderHomeIngredientList() {
           </span>
           <span class="home-meta">${escapeHtml(normalizeCategory(item.category))}</span>
           <div class="row-actions">
-            <button class="small-button" type="button" data-action="toggle-use-soon" data-id="${item.id}">${item.useSoon ? "Unmark" : "Use soon"}</button>
-            <button class="small-button" type="button" data-action="remove-home" data-id="${item.id}">Remove</button>
+            <button class="small-button" type="button" data-action="toggle-use-soon" data-id="${escapeAttribute(item.id)}">${item.useSoon ? "Unmark" : "Use soon"}</button>
+            <button class="small-button" type="button" data-action="remove-home" data-id="${escapeAttribute(item.id)}">Remove</button>
           </div>
         </div>
       `;
@@ -1348,7 +1551,7 @@ function handleMealSubmit(event) {
   const title = recipe?.name || customTitle;
 
   if (!title) {
-    alert("Add a meal name or pick a recipe.");
+    showToast("Add a meal name or pick a recipe");
     els.customMealName.focus();
     return;
   }
@@ -1363,6 +1566,7 @@ function handleMealSubmit(event) {
     chloeNote: els.chloeNote.value.trim(),
     extraGroceries: parseIngredientLines(els.extraGroceries.value),
     done: editingId ? findMeal(editingId)?.done || false : false,
+    updatedAt: nowMs(),
   };
 
   if (editingId) {
@@ -1414,6 +1618,7 @@ function handleWeekClick(event) {
 
   if (action === "toggle-done") {
     meal.done = !meal.done;
+    touchItem(meal);
     saveAndRender();
     showToast(meal.done ? "Meal marked done" : "Meal reopened");
   }
@@ -1424,6 +1629,7 @@ function handleWeekClick(event) {
 
   if (action === "remove-meal") {
     state.planItems = state.planItems.filter((item) => item.id !== id);
+    tombstoneItem(id);
     saveAndRender();
     showToast("Meal removed");
   }
@@ -1442,10 +1648,11 @@ function handleRecipeSubmit(event) {
     ingredients: parseIngredientLines(els.recipeIngredients.value),
     chloeNote: els.recipeChloeNote.value.trim(),
     steps: splitLines(els.recipeSteps.value),
+    updatedAt: nowMs(),
   };
 
   if (!recipe.name) {
-    alert("Add a recipe name.");
+    showToast("Add a recipe name");
     els.recipeName.focus();
     return;
   }
@@ -1456,7 +1663,7 @@ function handleRecipeSubmit(event) {
       if (meal.recipeId !== editingId) {
         return meal;
       }
-      return { ...meal, title: recipe.name };
+      return touchItem({ ...meal, title: recipe.name });
     });
   } else {
     state.recipes.push(recipe);
@@ -1477,6 +1684,7 @@ function handleRecipeImportSubmit(event) {
     return;
   }
 
+  touchItem(importedRecipe);
   state.recipes.push(importedRecipe);
   els.recipeImportText.value = "";
   els.recipeImportStatus.textContent = `Imported ${importedRecipe.name}.`;
@@ -1517,8 +1725,9 @@ function handleRecipeClick(event) {
       return;
     }
     state.recipes = state.recipes.filter((item) => item.id !== id);
+    tombstoneItem(id);
     state.planItems = state.planItems.map((meal) =>
-      meal.recipeId === id ? { ...meal, recipeId: null } : meal,
+      meal.recipeId === id ? touchItem({ ...meal, recipeId: null }) : meal,
     );
     saveAndRender();
     showToast("Recipe deleted");
@@ -1599,6 +1808,7 @@ function handleSyncSubmit(event) {
   }
 
   syncState.settings = {
+    ...syncState.settings,
     enabled: true,
     householdId,
   };
@@ -1617,6 +1827,7 @@ function handleSyncNow() {
   }
 
   syncState.settings = {
+    ...syncState.settings,
     enabled: true,
     householdId,
   };
@@ -1634,6 +1845,7 @@ function handleSyncNow() {
 
 function handleSyncDisconnect() {
   syncState.settings = {
+    ...syncState.settings,
     enabled: false,
     householdId: syncState.settings.householdId || "",
   };
@@ -1641,6 +1853,111 @@ function handleSyncDisconnect() {
   disconnectSyncListener();
   setSyncStatus("local", "Saved on this device.");
   showToast("Sync paused");
+}
+
+// Build the JSON backup document for the current state: every synced field
+// plus enough metadata to identify and validate the file on import.
+function buildBackupDocument() {
+  const updatedAt = state.updatedAt || Date.now();
+  return {
+    app: "family-food-planner",
+    appVersion: APP_CACHE_VERSION,
+    exportedAt: new Date().toISOString(),
+    updatedAt,
+    state: serializeSyncedState(updatedAt),
+  };
+}
+
+function backupFileName(date) {
+  return `food-planner-backup-${toIso(date)}.json`;
+}
+
+function handleExportBackup() {
+  const backup = buildBackupDocument();
+  const blob = new Blob([JSON.stringify(backup, null, 2)], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = backupFileName(new Date());
+  link.click();
+  URL.revokeObjectURL(url);
+  showToast("Backup exported");
+}
+
+// Parse and validate a backup JSON string, returning { ok: true, sanitized }
+// or { ok: false, message } for a toast. Does not touch app state; callers
+// merge `sanitized` into state with mergeSyncedState. Exported logic is kept
+// standalone (no DOM) so it can be exercised directly by tests.
+function parseBackupFile(jsonText) {
+  let parsed;
+  try {
+    parsed = JSON.parse(jsonText);
+  } catch (error) {
+    return { ok: false, message: "That file is not valid JSON." };
+  }
+
+  if (!parsed || typeof parsed !== "object" || parsed.app !== "family-food-planner") {
+    return { ok: false, message: "That file is not a Family Food Planner backup." };
+  }
+
+  const sanitized = sanitizeSyncedState(parsed.state || {});
+  return { ok: true, sanitized };
+}
+
+// Merge a parsed+sanitized backup into `state` using the same per-item merge
+// core as remote sync, so an old backup can never wipe newer local data.
+// Returns the new state object; does not mutate the passed-in state.
+function importBackupIntoState(currentState, jsonText, confirmFn) {
+  const result = parseBackupFile(jsonText);
+  if (!result.ok) {
+    return result;
+  }
+
+  const confirmImport = confirmFn || (() => true);
+  const confirmed = confirmImport(
+    "Import this backup? It will be merged with what is already on this device (newer edits win, nothing already here is deleted).",
+  );
+  if (!confirmed) {
+    return { ok: false, message: "Import cancelled." };
+  }
+
+  const mergedUpdatedAt = Math.max(
+    Number(result.sanitized.updatedAt) || 0,
+    Number(currentState.updatedAt) || 0,
+  ) || Date.now();
+  const merged = mergeSyncedState(currentState, result.sanitized, mergedUpdatedAt);
+
+  return {
+    ok: true,
+    state: {
+      ...currentState,
+      ...merged,
+    },
+  };
+}
+
+function handleImportBackupFile(event) {
+  const file = event.target.files && event.target.files[0];
+  event.target.value = "";
+  if (!file) {
+    return;
+  }
+
+  const reader = new FileReader();
+  reader.onload = () => {
+    const outcome = importBackupIntoState(state, String(reader.result || ""), (message) => window.confirm(message));
+    if (!outcome.ok) {
+      showToast(outcome.message || "Could not import that backup");
+      return;
+    }
+    state = outcome.state;
+    saveAndRender();
+    showToast("Backup imported");
+  };
+  reader.onerror = () => {
+    showToast("Could not read that file");
+  };
+  reader.readAsText(file);
 }
 
 function handleChloeFavoriteClick(event) {
@@ -1651,6 +1968,7 @@ function handleChloeFavoriteClick(event) {
 
   if (button.dataset.action === "remove-favorite") {
     state.chloeFavorites = state.chloeFavorites.filter((item) => item.id !== button.dataset.id);
+    tombstoneItem(button.dataset.id);
     saveAndRender();
     showToast("Favorite removed");
   }
@@ -1664,6 +1982,7 @@ function handleHomeIngredientClick(event) {
 
   if (button.dataset.action === "remove-home") {
     state.homeIngredients = state.homeIngredients.filter((item) => item.id !== button.dataset.id);
+    tombstoneItem(button.dataset.id);
     saveAndRender();
     showToast("Pantry item removed");
   }
@@ -1674,6 +1993,7 @@ function handleHomeIngredientClick(event) {
       return;
     }
     item.useSoon = !item.useSoon;
+    touchItem(item);
     saveAndRender();
     showToast(item.useSoon ? "Marked use soon" : "Use soon removed");
   }
@@ -1704,6 +2024,7 @@ function handleManualGrocerySubmit(event) {
     amount: els.manualGroceryAmount.value.trim(),
     unit: "",
     category: normalizeCategory(els.manualGroceryCategory.value),
+    updatedAt: nowMs(),
   });
 
   els.manualGroceryForm.reset();
@@ -1717,8 +2038,23 @@ function handleGroceryChange(event) {
     return;
   }
 
-  state.groceryChecked[checkbox.dataset.key] = checkbox.checked;
+  setGroceryChecked(checkbox.dataset.key, checkbox.checked);
   saveAndRender();
+}
+
+// Update a grocery checkmark and stamp its checkedAt timestamp so the newer
+// per-key write wins during merge. Unchecking clears the flag but keeps the
+// (newer) timestamp so a stale remote check does not resurrect it.
+function setGroceryChecked(key, checked) {
+  if (!state.groceryCheckedAt || typeof state.groceryCheckedAt !== "object") {
+    state.groceryCheckedAt = {};
+  }
+  if (checked) {
+    state.groceryChecked[key] = true;
+  } else {
+    delete state.groceryChecked[key];
+  }
+  state.groceryCheckedAt[key] = nowMs();
 }
 
 function handleGroceryClick(event) {
@@ -1729,7 +2065,12 @@ function handleGroceryClick(event) {
 
   if (button.dataset.action === "remove-grocery") {
     state.manualGroceries = state.manualGroceries.filter((item) => item.id !== button.dataset.id);
-    delete state.groceryChecked[`manual|${button.dataset.id}`];
+    tombstoneItem(button.dataset.id);
+    const groceryKey = `manual|${button.dataset.id}`;
+    delete state.groceryChecked[groceryKey];
+    if (state.groceryCheckedAt) {
+      state.groceryCheckedAt[groceryKey] = nowMs();
+    }
     saveAndRender();
     showToast("Grocery removed");
   }
@@ -1814,9 +2155,15 @@ function disconnectSyncListener() {
 }
 
 function handleRemoteSnapshot(snapshot) {
+  const isFirstSnapshot = !syncState.receivedFirstSnapshot;
   syncState.receivedFirstSnapshot = true;
+  const householdId = syncState.currentHouseholdId;
+  const firstContact = isFirstSnapshot && !hasSyncedWithHousehold(householdId);
 
   if (!snapshot.exists()) {
+    // No household document yet: this device seeds it. Record that we have
+    // synced so a later snapshot is not treated as first contact.
+    markSyncedWithHousehold(householdId);
     setSyncStatus("syncing", "Creating shared plan...");
     pushStateToCloud();
     return;
@@ -1828,23 +2175,215 @@ function handleRemoteSnapshot(snapshot) {
   const localUpdatedAt = Number(state.updatedAt || 0);
 
   if (data.deviceId === syncState.deviceId) {
+    markSyncedWithHousehold(householdId);
     setSyncStatus("synced", `Synced ${formatShortTime(new Date())}.`);
     return;
   }
 
+  // First contact with a household this device has never synced with: never let
+  // local seed data overwrite the household. Always merge (remote wins ties),
+  // apply locally, and push the merged result back.
+  if (firstContact) {
+    applyRemoteState(remoteState, remoteUpdatedAt);
+    markSyncedWithHousehold(householdId);
+    setSyncStatus("syncing", "Merging shared plan...");
+    queueSyncPush(0);
+    return;
+  }
+
+  markSyncedWithHousehold(householdId);
+
   if (remoteUpdatedAt > localUpdatedAt) {
+    // Remote is ahead: merge it in (keeping any newer local items) and, if the
+    // merge produced anything the cloud does not have, push it back.
     applyRemoteState(remoteState, remoteUpdatedAt);
     setSyncStatus("synced", `Updated ${formatShortTime(new Date())}.`);
     return;
   }
 
   if (remoteUpdatedAt < localUpdatedAt) {
+    // Local is ahead: still merge remote in so nothing on the cloud is lost,
+    // then upload the merged result.
+    applyRemoteState(remoteState, localUpdatedAt);
     setSyncStatus("syncing", "Uploading newer changes...");
     queueSyncPush(0);
     return;
   }
 
   setSyncStatus("synced", `Synced ${formatShortTime(new Date())}.`);
+}
+
+// Fields on a synced item that must be strings if present (everything else on
+// the item is dropped except id/updatedAt/tags/steps/ingredients/etc, handled
+// separately below).
+const SANITIZED_ITEM_STRING_FIELDS = [
+  "name",
+  "title",
+  "note",
+  "chloeNote",
+  "time",
+  "slot",
+  "date",
+  "audience",
+  "category",
+  "unit",
+  "amount",
+];
+
+function sanitizeString(value) {
+  return typeof value === "string" ? value : value === undefined || value === null ? "" : String(value);
+}
+
+// A synced item must be a plain object with a usable string id. Everything
+// else is best-effort coerced so a malformed remote/imported document cannot
+// inject unexpected shapes (or, downstream, unescaped HTML) into local state.
+function sanitizeSyncedItem(rawItem) {
+  if (!rawItem || typeof rawItem !== "object") {
+    return null;
+  }
+
+  const id = sanitizeString(rawItem.id).trim();
+  if (!id) {
+    return null;
+  }
+
+  const item = { id };
+
+  SANITIZED_ITEM_STRING_FIELDS.forEach((field) => {
+    if (rawItem[field] !== undefined) {
+      item[field] = sanitizeString(rawItem[field]);
+    }
+  });
+
+  if (rawItem.updatedAt !== undefined) {
+    item.updatedAt = Number(rawItem.updatedAt) || 0;
+  }
+  if (rawItem.done !== undefined) {
+    item.done = Boolean(rawItem.done);
+  }
+  if (rawItem.useSoon !== undefined) {
+    item.useSoon = Boolean(rawItem.useSoon);
+  }
+  if (rawItem.servings !== undefined) {
+    const servings = Number(rawItem.servings);
+    item.servings = Number.isFinite(servings) ? servings : "";
+  }
+  if (rawItem.recipeId !== undefined) {
+    item.recipeId = rawItem.recipeId === null ? null : sanitizeString(rawItem.recipeId);
+  }
+
+  if (Array.isArray(rawItem.tags)) {
+    item.tags = rawItem.tags.map(sanitizeString);
+  }
+  if (Array.isArray(rawItem.steps)) {
+    item.steps = rawItem.steps.map(sanitizeString);
+  }
+  if (Array.isArray(rawItem.ingredients)) {
+    item.ingredients = rawItem.ingredients.map(sanitizeSyncedItem).filter(Boolean);
+  }
+  if (Array.isArray(rawItem.extraGroceries)) {
+    item.extraGroceries = rawItem.extraGroceries.map(sanitizeSyncedItem).filter(Boolean);
+  }
+
+  return item;
+}
+
+// Sanitize an array field of a synced collection: must be an array of plain
+// objects with a usable id; anything else is dropped.
+function sanitizeSyncedCollection(rawCollection) {
+  if (!Array.isArray(rawCollection)) {
+    return [];
+  }
+  return rawCollection.map(sanitizeSyncedItem).filter(Boolean);
+}
+
+// Sanitize a map-shaped field (groceryChecked, groceryCheckedAt, deletedItems):
+// plain object, boolean-ish or numeric-ish values depending on `valueType`.
+function sanitizeSyncedMap(rawMap, valueType) {
+  if (!rawMap || typeof rawMap !== "object" || Array.isArray(rawMap)) {
+    return {};
+  }
+  const result = {};
+  Object.keys(rawMap).forEach((key) => {
+    const cleanKey = sanitizeString(key).trim();
+    if (!cleanKey) {
+      return;
+    }
+    if (valueType === "boolean") {
+      if (rawMap[key]) {
+        result[cleanKey] = true;
+      }
+    } else {
+      const num = Number(rawMap[key]);
+      if (num) {
+        result[cleanKey] = num;
+      }
+    }
+  });
+  return result;
+}
+
+// Sanitize a whole synced state payload (from remote sync or an imported JSON
+// backup) before it is ever merged into local state. Coerces every known
+// collection/map to its expected shape and drops anything unexpected, so a
+// malformed or attacker-shaped document cannot inject bad data (or, via
+// unescaped rendering, HTML) into the app.
+function sanitizeSyncedState(raw) {
+  const source = raw && typeof raw === "object" ? raw : {};
+  const clean = {};
+
+  MERGED_ITEM_COLLECTIONS.forEach((field) => {
+    clean[field] = sanitizeSyncedCollection(source[field]);
+  });
+
+  clean.groceryChecked = sanitizeSyncedMap(source.groceryChecked, "boolean");
+  clean.groceryCheckedAt = sanitizeSyncedMap(source.groceryCheckedAt, "number");
+  clean.deletedItems = sanitizeSyncedMap(source.deletedItems, "number");
+  clean.appliedImports = Array.isArray(source.appliedImports)
+    ? source.appliedImports.map(sanitizeString).filter(Boolean)
+    : [];
+
+  if (source.updatedAt !== undefined) {
+    clean.updatedAt = Number(source.updatedAt) || 0;
+  }
+
+  return clean;
+}
+
+// Build the per-item merge of the local state with a remote synced state.
+// Every collection is merged by item id (newer item updatedAt wins, tombstones
+// remove); groceryChecked merges per key by checkedAt; appliedImports unions;
+// deletedItems merges by per-id max. View state stays local. Returns the merged
+// synced fields plus the new updatedAt; does not mutate `state`.
+function mergeSyncedState(localState, remoteState, mergedUpdatedAt) {
+  const remote = remoteState && typeof remoteState === "object" ? remoteState : {};
+
+  const deletedItems = mergeTombstones(localState.deletedItems, remote.deletedItems);
+
+  const merged = {
+    deletedItems,
+    appliedImports: mergeAppliedImports(localState.appliedImports, remote.appliedImports),
+  };
+
+  MERGED_ITEM_COLLECTIONS.forEach((field) => {
+    const localItems = localState[field];
+    const remoteItems = Object.prototype.hasOwnProperty.call(remote, field)
+      ? remote[field]
+      : localItems;
+    merged[field] = mergeItemArrays(localItems, remoteItems, deletedItems);
+  });
+
+  const groceries = mergeGroceryChecked(
+    localState.groceryChecked,
+    localState.groceryCheckedAt,
+    remote.groceryChecked,
+    remote.groceryCheckedAt,
+  );
+  merged.groceryChecked = groceries.checked;
+  merged.groceryCheckedAt = groceries.checkedAt;
+
+  merged.updatedAt = mergedUpdatedAt || Date.now();
+  return merged;
 }
 
 function applyRemoteState(remoteState, remoteUpdatedAt) {
@@ -1858,19 +2397,21 @@ function applyRemoteState(remoteState, remoteUpdatedAt) {
     selectedDate: state.selectedDate,
     weekStart: state.weekStart,
   };
-  const nextState = {
+
+  // Remote sync data can contain attacker-shaped strings; sanitize before it
+  // ever touches local state or rendering.
+  const sanitizedRemote = sanitizeSyncedState(remoteState);
+  const mergedUpdatedAt = Math.max(
+    Number(remoteUpdatedAt) || 0,
+    Number(state.updatedAt) || 0,
+  ) || Date.now();
+  const merged = mergeSyncedState(state, sanitizedRemote, mergedUpdatedAt);
+
+  state = {
     ...state,
-    updatedAt: remoteUpdatedAt || Date.now(),
+    ...merged,
     ...localView,
   };
-
-  SYNCED_STATE_FIELDS.forEach((field) => {
-    if (Object.prototype.hasOwnProperty.call(remoteState, field)) {
-      nextState[field] = remoteState[field];
-    }
-  });
-
-  state = nextState;
   persistState(state);
   render();
   syncState.isApplyingRemote = false;
@@ -1937,7 +2478,14 @@ function serializeSyncedState(updatedAt) {
     updatedAt,
   };
   SYNCED_STATE_FIELDS.forEach((field) => {
-    synced[field] = state[field];
+    const value = state[field];
+    if (value !== undefined) {
+      synced[field] = value;
+    } else if (field === "groceryChecked" || field === "groceryCheckedAt" || field === "deletedItems") {
+      synced[field] = {};
+    } else {
+      synced[field] = [];
+    }
   });
   return JSON.parse(JSON.stringify(synced));
 }
@@ -1995,6 +2543,7 @@ function addRecipeToFirstOpenDinner(recipeId) {
     chloeNote: recipe.chloeNote || favoriteNote,
     extraGroceries: [],
     done: false,
+    updatedAt: nowMs(),
   });
 
   state.activeTab = "planner";
@@ -2007,7 +2556,13 @@ function addHomeIngredient(item) {
   mergeHomeIngredient(state.homeIngredients, item);
 }
 
-function mergeRecipe(recipes, recipe) {
+function mergeRecipe(recipes, recipe, deletedItems) {
+  const tombstones = deletedItems && typeof deletedItems === "object" ? deletedItems : {};
+  // Do not resurrect a seeded recipe the family deleted (its id is tombstoned).
+  if (recipe.id && tombstones[recipe.id]) {
+    return false;
+  }
+
   const existing = recipes.find((item) => {
     return item.id === recipe.id || ingredientNamesMatch(item.name, recipe.name);
   });
@@ -2015,7 +2570,7 @@ function mergeRecipe(recipes, recipe) {
     return false;
   }
 
-  recipes.push(recipe);
+  recipes.push(touchItem({ ...recipe }));
   return true;
 }
 
@@ -2028,6 +2583,7 @@ function mergeChloeFavorite(favorites, item) {
   const existing = favorites.find((favorite) => ingredientNamesMatch(favorite.name, cleanName));
   if (existing) {
     existing.note = item.note || existing.note;
+    touchItem(existing);
     return false;
   }
 
@@ -2035,6 +2591,7 @@ function mergeChloeFavorite(favorites, item) {
     id: createId(),
     name: cleanName,
     note: item.note || "",
+    updatedAt: nowMs(),
   });
   return true;
 }
@@ -2052,6 +2609,7 @@ function mergeHomeIngredient(homeIngredients, item) {
     unit: item.unit || "",
     category: normalizeCategory(item.category),
     useSoon: Boolean(item.useSoon),
+    updatedAt: nowMs(),
   };
   const existing = homeIngredients.find((entry) => ingredientNamesMatch(entry.name, next.name));
 
@@ -2060,6 +2618,7 @@ function mergeHomeIngredient(homeIngredients, item) {
     existing.unit = next.unit || existing.unit;
     existing.category = next.category || existing.category;
     existing.useSoon = existing.useSoon || next.useSoon;
+    touchItem(existing);
     return false;
   }
 
@@ -2162,11 +2721,14 @@ function getFirstOpenDinnerDate() {
 
 function buildRecipeRecommendations() {
   return state.recipes
-    .map((recipe) => ({
-      recipe,
-      analysis: analyzeRecipe(recipe),
-      score: scoreRecipeForHome(recipe),
-    }))
+    .map((recipe) => {
+      const analysis = analyzeRecipe(recipe);
+      return {
+        recipe,
+        analysis,
+        score: scoreRecipeForHome(recipe, analysis),
+      };
+    })
     .sort((a, b) => b.score - a.score || a.recipe.name.localeCompare(b.recipe.name));
 }
 
@@ -2200,8 +2762,8 @@ function analyzeRecipe(recipe) {
   };
 }
 
-function scoreRecipeForHome(recipe) {
-  const analysis = analyzeRecipe(recipe);
+function scoreRecipeForHome(recipe, precomputedAnalysis) {
+  const analysis = precomputedAnalysis || analyzeRecipe(recipe);
   return (
     scoreRecipe(recipe) +
     analysis.have.length * 5 +
@@ -2781,6 +3343,7 @@ function loadSyncSettings() {
       return {
         enabled: false,
         householdId: "",
+        hasSyncedWith: [],
       };
     }
 
@@ -2788,12 +3351,14 @@ function loadSyncSettings() {
     return {
       enabled: Boolean(parsed.enabled),
       householdId: normalizeHouseholdId(parsed.householdId),
+      hasSyncedWith: Array.isArray(parsed.hasSyncedWith) ? parsed.hasSyncedWith : [],
     };
   } catch (error) {
     console.warn("Could not load sync settings", error);
     return {
       enabled: false,
       householdId: "",
+      hasSyncedWith: [],
     };
   }
 }
@@ -2804,6 +3369,25 @@ function saveSyncSettings(settings) {
   } catch (error) {
     console.warn("Could not save sync settings", error);
   }
+}
+
+// True once this device has completed at least one successful sync with the
+// household. Used so the very first snapshot from a never-seen household never
+// overwrites the household with local seed data.
+function hasSyncedWithHousehold(householdId) {
+  const list = syncState.settings.hasSyncedWith;
+  return Array.isArray(list) && list.includes(householdId);
+}
+
+function markSyncedWithHousehold(householdId) {
+  if (!householdId || hasSyncedWithHousehold(householdId)) {
+    return;
+  }
+  const list = Array.isArray(syncState.settings.hasSyncedWith)
+    ? syncState.settings.hasSyncedWith
+    : [];
+  syncState.settings.hasSyncedWith = [...list, householdId];
+  saveSyncSettings(syncState.settings);
 }
 
 function getDeviceId() {
@@ -2867,12 +3451,24 @@ function ingredientNamesMatch(left, right) {
 
   const shorter = a.length < b.length ? a : b;
   const longer = a.length < b.length ? b : a;
-  const longerWords = new Set(longer.split(" "));
+  const longerWords = longer.split(" ");
+  const longerWordSet = new Set(longerWords);
   const shorterWords = shorter.split(" ");
-  if (shorterWords.length && shorterWords.every((word) => word.length >= 3 && longerWords.has(word))) {
+  // In English compounds the LAST word is the head noun: "shredded cheese" IS
+  // cheese (match ok), but "corn starch" is starch, not corn (no match). Require
+  // the longer name's head noun to be one of the shorter name's words, on top of
+  // the existing word-subset check. This deliberately prefers false negatives
+  // (item still shows on the grocery list) over false positives (item silently
+  // missing from it).
+  const headNoun = longerWords[longerWords.length - 1];
+  if (
+    shorterWords.length &&
+    shorterWords.every((word) => word.length >= 3 && longerWordSet.has(word)) &&
+    shorterWords.includes(headNoun)
+  ) {
     return true;
   }
-  return shorter.length >= 4 && longer.includes(shorter);
+  return false;
 }
 
 function canonicalIngredientName(name) {

@@ -7,7 +7,7 @@
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-title" content="Food Planner" />
     <title>Family Food Planner</title>
-    <link rel="manifest" href="manifest.webmanifest?v=10" />
+    <link rel="manifest" href="manifest.webmanifest?v=11" />
     <link rel="icon" href="assets/app-icon.svg" type="image/svg+xml" />
     <link rel="apple-touch-icon" href="assets/app-icon-192.png" />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
@@ -16,7 +16,7 @@
       href="https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,600;9..40,700&display=swap"
       rel="stylesheet"
     />
-    <link rel="stylesheet" href="styles.css?v=10" />
+    <link rel="stylesheet" href="styles.css?v=11" />
   </head>
   <body>
     <div class="app-shell">
@@ -350,6 +350,11 @@
                   </div>
                   <button class="ghost-button align-left" id="disconnectSync" type="button">Use this phone only</button>
                 </form>
+                <div class="sync-actions">
+                  <button class="ghost-button align-left" id="exportBackup" type="button">Export backup</button>
+                  <button class="ghost-button align-left" id="importBackup" type="button">Import backup</button>
+                </div>
+                <input id="importBackupFile" type="file" accept="application/json" class="hidden" />
               </div>
             </aside>
           </div>
@@ -435,7 +440,7 @@
       <div class="home-indicator" aria-hidden="true"></div>
     </div>
 
-    <script src="firebase-config.js?v=10"></script>
-    <script src="app.js?v=10"></script>
+    <script src="firebase-config.js?v=11"></script>
+    <script src="app.js?v=11"></script>
   </body>
 </html>

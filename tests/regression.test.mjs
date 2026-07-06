@@ -190,6 +190,26 @@ test("ingredient lines preserve mixed fractions, units, and categories", async (
   assert.equal(app.run('parseAmount("1 1/2")'), 1.5);
 });
 
+test("ingredient matching requires the head noun so compound pantry items don't shadow unrelated recipe ingredients", async () => {
+  const app = await createHarness();
+
+  const noMatch = (left, right) =>
+    app.run(`ingredientNamesMatch(${JSON.stringify(left)}, ${JSON.stringify(right)})`);
+
+  // False positives from the old loose rules: a pantry item whose compound name
+  // ends in an unrelated head noun must NOT hide the recipe ingredient.
+  assert.equal(noMatch("corn", "corn starch"), false);
+  assert.equal(noMatch("rice", "rice vinegar"), false);
+  assert.equal(noMatch("garlic", "garlic powder"), false);
+
+  // Real matches must still work: head noun matches, plain plural/singular, and
+  // exact matches.
+  assert.equal(noMatch("cheese", "shredded cheese"), true);
+  assert.equal(noMatch("rice", "cooked rice"), true);
+  assert.equal(noMatch("carrots", "carrot"), true);
+  assert.equal(noMatch("rice", "rice"), true);
+});
+
 test("pasted recipes import name, timing, servings, tags, and inferred categories", async () => {
   const app = await createHarness();
   app.context.__recipeText = `
@@ -364,4 +384,290 @@ test("quick idea buttons add the recipe to an open dinner slot", async () => {
   assert.equal(added.recipeId, recipeId);
   assert.equal(added.slot, "Dinner");
   assert.equal(app.run("state.activeTab"), "planner");
+});
+
+// Install a fake Firestore into syncState that captures every pushed document
+// and drives one remote snapshot through handleRemoteSnapshot. Returns the last
+// captured push payload (or null if nothing was pushed).
+async function drySync(app, { snapshotData, householdId = "family", hasSyncedWith = [] }) {
+  app.context.__snapshotData = snapshotData;
+  app.context.__pushed = null;
+  app.run(`
+    syncState.settings = { enabled: true, householdId: ${JSON.stringify(householdId)}, hasSyncedWith: ${JSON.stringify(hasSyncedWith)} };
+    syncState.currentHouseholdId = ${JSON.stringify(householdId)};
+    syncState.receivedFirstSnapshot = false;
+    syncState.deviceId = "local-device";
+    syncState.docRef = { ref: true };
+    syncState.firestore = {
+      serverTimestamp: () => "server-time",
+      setDoc: (ref, doc) => { __pushed = doc; return Promise.resolve(doc); },
+    };
+    handleRemoteSnapshot({
+      exists: () => __snapshotData !== null,
+      data: () => __snapshotData,
+    });
+  `);
+  // Let the debounced queueSyncPush timer fire and the async setDoc resolve.
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  return plain(app.run("__pushed"));
+}
+
+test("fresh device merges into an established household without clobbering it", async () => {
+  const app = await createHarness();
+
+  // Remote household has custom recipes and a plan item, edited long ago.
+  app.context.__remote = {
+    app: "family-food-planner",
+    updatedAt: 1000,
+    deviceId: "other-device",
+    state: {
+      updatedAt: 1000,
+      recipes: [
+        { id: "household-recipe", name: "Grandma stew", tags: [], ingredients: [], steps: [], updatedAt: 1000 },
+      ],
+      planItems: [
+        { id: "household-meal", date: "2026-06-22", slot: "Dinner", recipeId: "household-recipe", title: "Grandma stew", audience: "Everyone", chloeNote: "", extraGroceries: [], done: false, updatedAt: 1000 },
+      ],
+      chloeFavorites: [],
+      homeIngredients: [],
+      manualGroceries: [],
+      groceryChecked: {},
+      groceryCheckedAt: {},
+      appliedImports: ["household-import"],
+      deletedItems: {},
+    },
+  };
+
+  // Fresh device: only a locally-added recipe, seeded/stamped just now (newer
+  // state-level updatedAt than the household).
+  app.run(`
+    state = {
+      weekStart: "2026-06-22",
+      activeTab: "planner",
+      selectedDate: "2026-06-22",
+      recipes: [{ id: "local-recipe", name: "My new dish", tags: [], ingredients: [], steps: [], updatedAt: 5000 }],
+      planItems: [],
+      chloeFavorites: [],
+      homeIngredients: [],
+      manualGroceries: [],
+      groceryChecked: {},
+      groceryCheckedAt: {},
+      appliedImports: [],
+      deletedItems: {},
+      updatedAt: 5000
+    };
+  `);
+
+  const pushed = await drySync(app, { snapshotData: app.context.__remote });
+
+  const merged = app.run("state");
+  const recipeIds = plain(merged.recipes.map((recipe) => recipe.id)).sort();
+  assert.deepEqual(recipeIds, ["household-recipe", "local-recipe"]);
+  assert.equal(merged.planItems.length, 1);
+  assert.equal(merged.planItems[0].id, "household-meal");
+
+  // The pushed document must also carry the household data (nothing lost).
+  assert.ok(pushed, "a merged push was uploaded");
+  const pushedRecipeIds = pushed.state.recipes.map((recipe) => recipe.id).sort();
+  assert.deepEqual(pushedRecipeIds, ["household-recipe", "local-recipe"]);
+  assert.ok(pushed.state.planItems.some((meal) => meal.id === "household-meal"));
+});
+
+test("concurrent edits merge so both survive", async () => {
+  const app = await createHarness();
+
+  app.context.__remote = {
+    app: "family-food-planner",
+    updatedAt: 9000,
+    deviceId: "other-device",
+    state: {
+      updatedAt: 9000,
+      recipes: [],
+      planItems: [],
+      chloeFavorites: [{ id: "remote-fav", name: "mango", note: "", updatedAt: 9000 }],
+      homeIngredients: [],
+      manualGroceries: [],
+      groceryChecked: { "manual|remote-grocery": true },
+      groceryCheckedAt: { "manual|remote-grocery": 9000 },
+      appliedImports: [],
+      deletedItems: {},
+    },
+  };
+
+  // Local added a recipe offline (older state-level updatedAt than remote).
+  app.run(`
+    state = {
+      weekStart: "2026-06-22",
+      activeTab: "planner",
+      selectedDate: "2026-06-22",
+      recipes: [{ id: "local-recipe", name: "Offline dish", tags: [], ingredients: [], steps: [], updatedAt: 8000 }],
+      planItems: [],
+      chloeFavorites: [],
+      homeIngredients: [],
+      manualGroceries: [],
+      groceryChecked: {},
+      groceryCheckedAt: {},
+      appliedImports: [],
+      deletedItems: {},
+      updatedAt: 8000
+    };
+  `);
+
+  await drySync(app, {
+    snapshotData: app.context.__remote,
+    hasSyncedWith: ["family"],
+  });
+
+  const merged = app.run("state");
+  assert.ok(merged.recipes.some((recipe) => recipe.id === "local-recipe"), "local recipe survives");
+  assert.ok(
+    merged.chloeFavorites.some((favorite) => favorite.id === "remote-fav"),
+    "remote favorite survives",
+  );
+  assert.equal(merged.groceryChecked["manual|remote-grocery"], true);
+});
+
+test("deletion tombstones propagate and a newer edit wins over a stale delete", async () => {
+  const app = await createHarness();
+
+  // Remote tombstones a recipe the local side still has with an older stamp.
+  app.context.__remote = {
+    app: "family-food-planner",
+    updatedAt: 9000,
+    deviceId: "other-device",
+    state: {
+      updatedAt: 9000,
+      recipes: [],
+      planItems: [],
+      chloeFavorites: [],
+      homeIngredients: [],
+      manualGroceries: [],
+      groceryChecked: {},
+      groceryCheckedAt: {},
+      appliedImports: [],
+      deletedItems: { "doomed-recipe": 8000, "survivor-recipe": 3000 },
+    },
+  };
+
+  app.run(`
+    state = {
+      weekStart: "2026-06-22",
+      activeTab: "planner",
+      selectedDate: "2026-06-22",
+      recipes: [
+        { id: "doomed-recipe", name: "Old dish", tags: [], ingredients: [], steps: [], updatedAt: 1000 },
+        { id: "survivor-recipe", name: "Kept dish", tags: [], ingredients: [], steps: [], updatedAt: 5000 }
+      ],
+      planItems: [],
+      chloeFavorites: [],
+      homeIngredients: [],
+      manualGroceries: [],
+      groceryChecked: {},
+      groceryCheckedAt: {},
+      appliedImports: [],
+      deletedItems: {},
+      updatedAt: 4000
+    };
+  `);
+
+  await drySync(app, {
+    snapshotData: app.context.__remote,
+    hasSyncedWith: ["family"],
+  });
+
+  let merged = app.run("state");
+  const recipeIds = plain(merged.recipes.map((recipe) => recipe.id));
+  // Tombstone (8000) newer than item (1000) removes it.
+  assert.ok(!recipeIds.includes("doomed-recipe"), "tombstoned recipe removed");
+  // Item edited (5000) after its tombstone (3000) survives.
+  assert.ok(recipeIds.includes("survivor-recipe"), "edit newer than tombstone survives");
+  // Tombstone is retained so a later merge does not resurrect the item.
+  assert.equal(merged.deletedItems["doomed-recipe"], 8000);
+
+  // A subsequent merge with the same remote must not bring the deleted item back.
+  await drySync(app, {
+    snapshotData: app.context.__remote,
+    hasSyncedWith: ["family"],
+  });
+  merged = app.run("state");
+  assert.ok(
+    !merged.recipes.some((recipe) => recipe.id === "doomed-recipe"),
+    "deleted recipe stays gone on re-merge",
+  );
+});
+
+test("importing a JSON backup rejects the wrong app, sanitizes, and merges without wiping newer local data", async () => {
+  const app = await createHarness();
+
+  app.run(`
+    state = {
+      weekStart: "2026-06-22",
+      activeTab: "planner",
+      selectedDate: "2026-06-22",
+      recipes: [
+        { id: "local-recipe", name: "Local dish", tags: [], ingredients: [], steps: [], updatedAt: 5000 },
+      ],
+      planItems: [],
+      chloeFavorites: [],
+      homeIngredients: [],
+      manualGroceries: [],
+      groceryChecked: {},
+      groceryCheckedAt: {},
+      appliedImports: [],
+      deletedItems: {},
+      updatedAt: 5000
+    };
+  `);
+
+  // Wrong-app JSON is rejected with a message, not an exception.
+  const wrongApp = app.run(`importBackupIntoState(state, ${JSON.stringify(JSON.stringify({ app: "some-other-app" }))}, () => true)`);
+  assert.equal(wrongApp.ok, false);
+  assert.match(wrongApp.message, /not a Family Food Planner backup/i);
+
+  // Malformed JSON is rejected with a message, not an exception.
+  const badJson = app.run(`importBackupIntoState(state, ${JSON.stringify("{not valid json")}, () => true)`);
+  assert.equal(badJson.ok, false);
+  assert.match(badJson.message, /not valid JSON/i);
+
+  // A user declining the confirmation makes no changes.
+  const declined = app.run(`importBackupIntoState(state, ${JSON.stringify(JSON.stringify({ app: "family-food-planner", state: {} }))}, () => false)`);
+  assert.equal(declined.ok, false);
+
+  // An old backup (stale updatedAt, and a malformed/extra-field entry that the
+  // sanitizer must drop) merges in without deleting the newer local recipe.
+  const backupDoc = {
+    app: "family-food-planner",
+    appVersion: "1",
+    exportedAt: "2020-01-01T00:00:00.000Z",
+    updatedAt: 1000,
+    state: {
+      updatedAt: 1000,
+      recipes: [
+        { id: "backup-recipe", name: "Backup dish", tags: [], ingredients: [], steps: [], updatedAt: 1000 },
+        { name: "no id, should be dropped by the sanitizer" },
+      ],
+      planItems: [],
+      chloeFavorites: [{ id: "backup-fav", name: "mango", note: "", updatedAt: 1000 }],
+      homeIngredients: [],
+      manualGroceries: [],
+      groceryChecked: {},
+      groceryCheckedAt: {},
+      appliedImports: [],
+      deletedItems: {},
+    },
+  };
+
+  const outcome = app.run(
+    `importBackupIntoState(state, ${JSON.stringify(JSON.stringify(backupDoc))}, () => true)`,
+  );
+  assert.equal(outcome.ok, true);
+
+  const recipeIds = plain(outcome.state.recipes.map((recipe) => recipe.id)).sort();
+  assert.deepEqual(recipeIds, ["backup-recipe", "local-recipe"], "backup merges in, local survives");
+  assert.ok(
+    outcome.state.chloeFavorites.some((favorite) => favorite.id === "backup-fav"),
+    "backup favorite present after merge",
+  );
+  // Local was newer (5000 > 1000), so the merged updatedAt must not regress.
+  assert.equal(outcome.state.updatedAt, 5000);
 });
